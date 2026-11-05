@@ -57,8 +57,43 @@ const char* WALLPAPER_CACHE_PATH = "/wallpaper.jpg";
 
 bool wallpaperLoaded = false;
 bool wallpaperAttempted = false;
+uint32_t tjpgCallbackCount = 0;
+
+static const char* GITHUB_ROOT_CA =
+"-----BEGIN CERTIFICATE-----\n"
+"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\n"
+"-----END CERTIFICATE-----\n";
 
 bool tjpgOutput(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t* bitmap) {
+  tjpgCallbackCount++;
   if (y >= SCREEN_H) return 0;
   tft.drawRGBBitmap(x, y, bitmap, w, h);
   return 1;
@@ -298,102 +333,159 @@ void centerText(
 
 bool downloadWallpaper(const char* url, const char* path) {
   if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("[WALLPAPER] Skipped download: WiFi not connected.");
+    Serial.printf("[WALLPAPER] Download aborted: Wi-Fi not connected (status=%d).\n", (int)WiFi.status());
     return false;
   }
 
-  Serial.printf("[WALLPAPER] Download started from: %s\n", url);
+  Serial.println("[WALLPAPER] ========================================");
+  Serial.printf("[WALLPAPER] Wallpaper download started from: %s\n", url);
 
   WiFiClientSecure client;
-  client.setInsecure();
+  time_t now = time(nullptr);
+  if (now >= 1700000000) {
+    client.setCACert(GITHUB_ROOT_CA);
+    Serial.println("[WALLPAPER] TLS validation: Using ISRG Root X1 CA certificate.");
+  } else {
+    client.setInsecure();
+    Serial.println("[WALLPAPER] TLS validation: NTP time not synced; using fallback SSL mode.");
+  }
+
   HTTPClient http;
+  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+  http.setTimeout(12000);
+  http.setConnectTimeout(6000);
+  http.setUserAgent("COSMO-ESP32");
+  http.addHeader("Accept", "image/jpeg, */*");
 
   if (!http.begin(client, url)) {
     Serial.println("[WALLPAPER] ERROR: HTTPClient.begin failed!");
     return false;
   }
 
-  http.setTimeout(10000);
   int httpCode = http.GET();
   Serial.printf("[WALLPAPER] HTTP response code: %d\n", httpCode);
 
   if (httpCode != HTTP_CODE_OK) {
-    Serial.printf("[WALLPAPER] Download failed: server returned HTTP %d\n", httpCode);
+    Serial.printf("[WALLPAPER] ERROR: Server returned HTTP %d (%s).\n", httpCode, http.errorToString(httpCode).c_str());
     http.end();
     return false;
   }
 
   String contentType = http.header("Content-Type");
   int contentLength = http.getSize();
-  Serial.printf("[WALLPAPER] Content-Type: %s, Content-Length: %d bytes\n", contentType.c_str(), contentLength);
+  Serial.printf("[WALLPAPER] Response content type: %s, expected size: %d bytes\n", contentType.c_str(), contentLength);
 
-  File file = LittleFS.open(path, FILE_WRITE);
+  // Staging file in LittleFS to protect existing cache
+  const char* tempPath = "/wallpaper.tmp";
+  File file = LittleFS.open(tempPath, FILE_WRITE);
   if (!file) {
-    Serial.println("[WALLPAPER] ERROR: Failed to open LittleFS file for writing!");
+    Serial.println("[WALLPAPER] ERROR: Failed to create staging file /wallpaper.tmp in LittleFS!");
     http.end();
     return false;
   }
 
-  WiFiClient* stream = http.getStreamPtr();
-  uint8_t buffer[512];
-  int bytesRead = 0;
-  int totalBytes = 0;
-  bool isJpeg = false;
-
-  while (http.connected() && (bytesRead = stream->readBytes(buffer, sizeof(buffer))) > 0) {
-    if (totalBytes == 0 && bytesRead >= 2) {
-      if (buffer[0] == 0xFF && buffer[1] == 0xD8) {
-        isJpeg = true;
-      }
-    }
-    file.write(buffer, bytesRead);
-    totalBytes += bytesRead;
-  }
+  int bytesWritten = http.writeToStream(&file);
+  file.flush();
   file.close();
   http.end();
 
-  Serial.printf("[WALLPAPER] Downloaded %d bytes to %s\n", totalBytes, path);
+  Serial.printf("[WALLPAPER] Actual downloaded byte count: %d bytes\n", bytesWritten);
 
-  if (!isJpeg) {
-    Serial.println("[WALLPAPER] ERROR: Downloaded file header is not valid JPEG (0xFF 0xD8 missing). Removing.");
-    LittleFS.remove(path);
+  if (bytesWritten < 1000) {
+    Serial.printf("[WALLPAPER] ERROR: Download incomplete (%d bytes). Aborting.\n", bytesWritten);
+    LittleFS.remove(tempPath);
     return false;
   }
 
-  if (totalBytes < 1000) {
-    Serial.printf("[WALLPAPER] ERROR: File size (%d bytes) too small for valid 240x240 image. Removing.\n", totalBytes);
-    LittleFS.remove(path);
+  // Verify staging file
+  File verifyFile = LittleFS.open(tempPath, FILE_READ);
+  if (!verifyFile) {
+    Serial.println("[WALLPAPER] ERROR: Could not open staging file for verification!");
+    return false;
+  }
+  size_t storedSize = verifyFile.size();
+  uint8_t header[2] = {0, 0};
+  verifyFile.read(header, 2);
+  verifyFile.close();
+
+  Serial.printf("[WALLPAPER] File write result: Stored size = %u bytes\n", (unsigned int)storedSize);
+
+  if (header[0] != 0xFF || header[1] != 0xD8) {
+    Serial.printf("[WALLPAPER] JPEG validation result: FAILED (magic bytes 0x%02X 0x%02X, expected 0xFF 0xD8). Removing.\n", header[0], header[1]);
+    LittleFS.remove(tempPath);
     return false;
   }
 
-  Serial.printf("[WALLPAPER] Successfully cached wallpaper (%d bytes) in LittleFS.\n", totalBytes);
+  uint16_t jw = 0, jh = 0;
+  JRESULT jres = TJpgDec.getFsJpgSize(&jw, &jh, tempPath, LittleFS);
+  Serial.printf("[WALLPAPER] JPEG validation result: %s (code=%d, dimensions=%ux%u)\n", 
+                (jres == JDR_OK ? "VALID JPEG" : "CORRUPT JPEG"), (int)jres, jw, jh);
+
+  if (jres != JDR_OK) {
+    Serial.printf("[WALLPAPER] ERROR: TJpg_Decoder header parse failed with code %d. Removing.\n", (int)jres);
+    LittleFS.remove(tempPath);
+    return false;
+  }
+
+  // Atomically promote to final cache path
+  if (LittleFS.exists(path)) {
+    LittleFS.remove(path);
+  }
+  if (!LittleFS.rename(tempPath, path)) {
+    Serial.printf("[WALLPAPER] ERROR: Failed to rename %s to %s!\n", tempPath, path);
+    return false;
+  }
+
+  Serial.printf("[WALLPAPER] Final file size: %s is %u bytes. Successfully cached!\n", path, (unsigned int)storedSize);
+  Serial.println("[WALLPAPER] ========================================");
   return true;
 }
 
 bool renderWallpaper() {
+  tjpgCallbackCount = 0;
+  Serial.println("[WALLPAPER] Starting render from LittleFS...");
+
   if (!LittleFS.exists(WALLPAPER_CACHE_PATH)) {
-    Serial.println("[WALLPAPER] Cached wallpaper not found in LittleFS.");
+    Serial.printf("[WALLPAPER] Render FAILED: File %s not found in LittleFS.\n", WALLPAPER_CACHE_PATH);
     return false;
   }
 
   File f = LittleFS.open(WALLPAPER_CACHE_PATH, FILE_READ);
   if (!f) {
-    Serial.println("[WALLPAPER] Failed to open cached wallpaper for reading.");
+    Serial.printf("[WALLPAPER] Render FAILED: Cannot open %s for reading.\n", WALLPAPER_CACHE_PATH);
     return false;
   }
   size_t fSize = f.size();
   f.close();
 
-  Serial.printf("[WALLPAPER] Cached file size: %u bytes. Decoding with TJpg_Decoder...\n", (unsigned int)fSize);
+  Serial.printf("[WALLPAPER] Cached file size: %u bytes\n", (unsigned int)fSize);
   if (fSize < 1000) {
-    Serial.println("[WALLPAPER] Cached file corrupted/too small. Deleting cache.");
+    Serial.printf("[WALLPAPER] Render FAILED: File size %u too small. Purging corrupted file.\n", (unsigned int)fSize);
     LittleFS.remove(WALLPAPER_CACHE_PATH);
     return false;
   }
 
-  JRESULT res = TJpgDec.drawFsJpg(0, 0, WALLPAPER_CACHE_PATH, LittleFS);
-  Serial.printf("[WALLPAPER] TJpg_Decoder result: %d (0 = OK)\n", (int)res);
-  return (res == JDR_OK);
+  uint16_t w = 0, h = 0;
+  JRESULT szRes = TJpgDec.getFsJpgSize(&w, &h, WALLPAPER_CACHE_PATH, LittleFS);
+  if (szRes != JDR_OK) {
+    Serial.printf("[WALLPAPER] Render FAILED: getFsJpgSize error %d. Purging corrupted file.\n", (int)szRes);
+    LittleFS.remove(WALLPAPER_CACHE_PATH);
+    return false;
+  }
+
+  Serial.printf("[WALLPAPER] Decoded dimensions: %ux%u. Decoding JPEG blocks directly to GC9A01...\n", w, h);
+
+  JRESULT decRes = TJpgDec.drawFsJpg(0, 0, WALLPAPER_CACHE_PATH, LittleFS);
+  Serial.printf("[WALLPAPER] JPEG decoder result: %d (%s)\n", (int)decRes, (decRes == JDR_OK ? "JDR_OK" : "DECODE_ERROR"));
+  Serial.printf("[WALLPAPER] Number of drawing callback invocations: %u\n", tjpgCallbackCount);
+
+  if (decRes == JDR_OK && tjpgCallbackCount > 0) {
+    Serial.println("[WALLPAPER] SUCCESS: Wallpaper rendered completely on display.");
+    return true;
+  }
+
+  Serial.printf("[WALLPAPER] Render FAILED: decRes=%d, callbacks=%u. Falling back.\n", (int)decRes, tjpgCallbackCount);
+  return false;
 }
 
 void drawClock() {
@@ -422,20 +514,42 @@ void drawClock() {
 }
 
 void drawHome() {
+  Serial.println("[HOME] Drawing home screen...");
   bool rendered = false;
+
+  // 1. Try rendering from existing LittleFS cache
   if (LittleFS.exists(WALLPAPER_CACHE_PATH)) {
     rendered = renderWallpaper();
-  } else if (WiFi.status() == WL_CONNECTED && !wallpaperAttempted) {
-    wallpaperAttempted = true;
+    if (!rendered) {
+      Serial.println("[HOME] Existing wallpaper cache failed to render. Will attempt fresh download if Wi-Fi available.");
+    }
+  }
+
+  // 2. If not rendered and Wi-Fi is connected, download and render
+  if (!rendered && WiFi.status() == WL_CONNECTED) {
+    Serial.println("[HOME] No valid wallpaper cached. Downloading from cloud...");
     if (downloadWallpaper(COSMO_WALLPAPER_URL, WALLPAPER_CACHE_PATH)) {
       rendered = renderWallpaper();
     }
   }
 
+  // 3. Fallback or success handling
   if (!rendered) {
+    wallpaperLoaded = false;
+    Serial.print("[HOME] Drawing dark fallback background. Exact reason: ");
+    if (WiFi.status() != WL_CONNECTED && !LittleFS.exists(WALLPAPER_CACHE_PATH)) {
+      Serial.println("Wi-Fi not connected and no local cache exists.");
+    } else if (WiFi.status() == WL_CONNECTED) {
+      Serial.println("Download or JPEG decoding encountered an error.");
+    } else {
+      Serial.println("Local cache corrupted and Wi-Fi unavailable.");
+    }
+
     tft.fillScreen(BG);
     tft.drawCircle(120, 120, 114, DARKBLUE);
     tft.drawCircle(120, 120, 100, 0x10A2);
+  } else {
+    wallpaperLoaded = true;
   }
 
   // Header pill with title
@@ -1192,18 +1306,34 @@ void setup() {
   Serial.println("Carousel canvas ready.");
 
   if (!LittleFS.begin(true)) {
-    Serial.println("LittleFS mount failed, formatting...");
+    Serial.println("[STORAGE] LittleFS mount failed, formatting...");
   } else {
-    Serial.println("LittleFS mounted.");
+    size_t totalBytes = LittleFS.totalBytes();
+    size_t usedBytes = LittleFS.usedBytes();
+    Serial.printf("[STORAGE] LittleFS mount SUCCESS. Total: %u KB, Used: %u KB\n",
+                  (unsigned int)(totalBytes / 1024), (unsigned int)(usedBytes / 1024));
   }
 
   TJpgDec.setJpgScale(1);
-  TJpgDec.setSwapBytes(true);
+  TJpgDec.setSwapBytes(false);
   TJpgDec.setCallback(tjpgOutput);
 
   randomSeed(esp_random());
 
   connectWiFi();
+
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("[NTP] Waiting for clock synchronization...");
+    unsigned long ntpStart = millis();
+    while (time(nullptr) < 1700000000 && millis() - ntpStart < 2500) {
+      delay(100);
+    }
+    if (time(nullptr) >= 1700000000) {
+      Serial.println("[NTP] Clock synchronized successfully.");
+    } else {
+      Serial.println("[NTP] Clock sync timed out; continuing (TLS fallback active).");
+    }
+  }
 
   lastInteraction = millis();
 
@@ -1256,6 +1386,18 @@ void loop() {
   // ==================================
 
   if (screen == HOME) {
+
+    if (!wallpaperLoaded && WiFi.status() == WL_CONNECTED) {
+      static unsigned long lastWallpaperRetry = 0;
+      if (millis() - lastWallpaperRetry >= 5000) {
+        lastWallpaperRetry = millis();
+        Serial.println("[WALLPAPER] Background recovery: Wi-Fi connected, attempting wallpaper recovery...");
+        if (downloadWallpaper(COSMO_WALLPAPER_URL, WALLPAPER_CACHE_PATH)) {
+          drawHome();
+          return;
+        }
+      }
+    }
 
     if (selectPressed) {
 

@@ -61,3 +61,4 @@ Ensure the following APIs are enabled in your Google Cloud Project:
 3. Sign in with your brother's Google account and grant read-only permissions.
 4. You will be redirected to `/api/google/callback`, which stores the persistent refresh token.
 5. COSMO's `/api/google/reminders` endpoint is now active and will automatically refresh access tokens in the background.
+

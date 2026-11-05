@@ -52,3 +52,4 @@ This guide explains how to deploy the COSMO Node.js backend to [Railway](https:/
 - `GET /api/google/callback` – Google OAuth redirect callback
 - `GET /api/google/status` – Google authentication status
 - `GET /api/google/reminders` – Compact reminders feed for COSMO ESP32
+

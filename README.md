@@ -79,3 +79,4 @@ COSMO/
 
 ## 🔒 Security
 - All sensitive credentials (Wi-Fi passwords, OAuth secrets, database files) are strictly excluded from source control via `.gitignore`.
+
