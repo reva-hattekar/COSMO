@@ -1,0 +1,1405 @@
+#include <WiFi.h>
+#include <WiFiClientSecure.h>
+#include <HTTPClient.h>
+#include <LittleFS.h>
+#include <TJpg_Decoder.h>
+#include <time.h>
+#include <math.h>
+
+#include <Adafruit_GFX.h>
+#include <Adafruit_GC9A01A.h>
+
+#include <Fonts/FreeSans9pt7b.h>
+#include <Fonts/FreeSansBold12pt7b.h>
+
+struct Button {
+  int pin;
+  bool stableState;
+  bool lastReading;
+  unsigned long lastChange;
+};
+
+// ======================================
+// CONFIGURATION
+// ======================================
+
+#define DEVICE_NAME "COSMO"
+
+#if __has_include("secrets.h")
+#include "secrets.h"
+#else
+const char* WIFI_SSID = "YOUR_WIFI_SSID";
+const char* WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
+#endif
+
+const long GMT_OFFSET = 19800;
+const int DAYLIGHT_OFFSET = 0;
+
+// ======================================
+// DISPLAY
+// ======================================
+
+#define TFT_CS  5
+#define TFT_DC  32
+#define TFT_RST 4
+
+Adafruit_GC9A01A tft(TFT_CS, TFT_DC, TFT_RST);
+
+const int SCREEN_W = 240;
+const int SCREEN_H = 240;
+
+// ======================================
+// ONLINE WALLPAPER CONFIGURATION
+// ======================================
+
+#define COSMO_WALLPAPER_URL "https://raw.githubusercontent.com/reva-hattekar/COSMO/main/assets/wallpaper_240.jpg"
+const char* WALLPAPER_CACHE_PATH = "/wallpaper.jpg";
+
+bool wallpaperLoaded = false;
+bool wallpaperAttempted = false;
+
+bool tjpgOutput(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t* bitmap) {
+  if (y >= SCREEN_H) return 0;
+  tft.drawRGBBitmap(x, y, bitmap, w, h);
+  return 1;
+}
+
+#include "SnakeGame.h"
+#include "TetrisGame.h"
+#include "SimonGame.h"
+#include "AkinatorApp.h"
+
+#ifndef AKINATOR_SERVER_URL
+const char* AKINATOR_SERVER_URL = "http://192.168.1.100:3000";
+#endif
+
+SnakeGame snake(tft);
+TetrisGame tetris(tft);
+SimonGame simon(tft);
+AkinatorApp akinator(tft);
+
+// ======================================
+// BUTTONS
+// ======================================
+
+#define BTN_LEFT   33
+#define BTN_RIGHT  25
+#define BTN_SELECT 14
+
+Button leftButton   = {BTN_LEFT, HIGH, HIGH, 0};
+Button rightButton  = {BTN_RIGHT, HIGH, HIGH, 0};
+Button selectButton = {BTN_SELECT, HIGH, HIGH, 0};
+
+const unsigned long DEBOUNCE_MS = 25;
+
+bool leftPressed = false;
+bool rightPressed = false;
+bool selectPressed = false;
+
+// ======================================
+// COLOURS
+// ======================================
+
+#define BG       0x0000
+#define WHITE    0xFFFF
+#define CYAN     0x07FF
+#define BLUE     0x001F
+#define PURPLE   0x801F
+#define GREY     0x8410
+#define YELLOW   0xFFE0
+#define DARKBLUE 0x000D
+
+// ======================================
+// APPLICATIONS
+// ======================================
+
+const char* appNames[] = {
+  "MAGIC 8 BALL",
+  "AKINATOR",
+  "SNAKE",
+  "TETRIS",
+  "SIMON SAYS",
+  "REMINDERS"
+};
+
+const int APP_COUNT = 6;
+
+int appIndex = 0;
+
+enum ScreenState {
+  HOME,
+  LAUNCHER,
+  APP
+};
+
+ScreenState screen = HOME;
+
+// ======================================
+// MAGIC 8 BALL
+// ======================================
+
+const char* answers[] = {
+  "It is certain.",
+  "Without a doubt.",
+  "You may rely on it.",
+  "Absolutely!",
+  "Signs point to yes.",
+  "Most likely.",
+  "Outlook good.",
+  "Yes, definitely.",
+  "As I see it, yes.",
+  "Better not tell you.",
+  "Ask again later.",
+  "Cannot predict now.",
+  "Concentrate and ask.",
+  "Reply hazy, try again.",
+  "Don't count on it.",
+  "My reply is no.",
+  "Very doubtful.",
+  "Outlook not good.",
+  "My sources say no.",
+  "Absolutely not."
+};
+
+const int ANSWER_COUNT = 20;
+
+// ======================================
+// TIMERS
+// ======================================
+
+unsigned long lastInteraction = 0;
+unsigned long lastClockUpdate = 0;
+unsigned long lastWiFiAttempt = 0;
+
+const unsigned long IDLE_TIMEOUT = 10000;
+const unsigned long WIFI_RETRY = 10000;
+
+// ======================================
+// OFF-SCREEN CAROUSEL CANVAS
+// ======================================
+
+// 180 x 90 x 2 bytes = 32,400 bytes.
+
+const int CANVAS_W = 200;
+const int CANVAS_H = 130;
+
+GFXcanvas16 carouselCanvas(CANVAS_W, CANVAS_H);
+
+bool canvasAvailable = false;
+
+const int CANVAS_X = 20;
+const int CANVAS_Y = 32;
+// ======================================
+// CAROUSEL ANIMATION
+// ======================================
+
+bool animating = false;
+
+int animationDirection = 0;
+
+unsigned long animationStart = 0;
+unsigned long lastAnimationFrame = 0;
+
+const unsigned long ANIMATION_DURATION = 320;
+const unsigned long FRAME_INTERVAL = 25;
+
+const float CAROUSEL_SPACING = 77.0f;
+// ======================================
+// BUTTON HANDLING
+// ======================================
+
+bool updateButton(Button& button) {
+
+  bool reading = digitalRead(button.pin);
+
+  if (reading != button.lastReading) {
+    button.lastChange = millis();
+    button.lastReading = reading;
+  }
+
+  if (
+    millis() - button.lastChange >= DEBOUNCE_MS &&
+    reading != button.stableState
+  ) {
+
+    button.stableState = reading;
+
+    if (button.stableState == LOW) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+void updateButtons() {
+
+  leftPressed = updateButton(leftButton);
+  rightPressed = updateButton(rightButton);
+  selectPressed = updateButton(selectButton);
+}
+
+bool bothHeld() {
+
+  return digitalRead(BTN_LEFT) == LOW &&
+         digitalRead(BTN_RIGHT) == LOW;
+}
+
+void waitForButtonRelease() {
+  while (digitalRead(BTN_LEFT) == LOW || digitalRead(BTN_RIGHT) == LOW || digitalRead(BTN_SELECT) == LOW) {
+    delay(15);
+  }
+  delay(30);
+  leftButton.stableState = HIGH;
+  leftButton.lastReading = HIGH;
+  rightButton.stableState = HIGH;
+  rightButton.lastReading = HIGH;
+  selectButton.stableState = HIGH;
+  selectButton.lastReading = HIGH;
+  leftPressed = false;
+  rightPressed = false;
+  selectPressed = false;
+}
+
+// ======================================
+// TEXT HELPERS
+// ======================================
+
+void centerText(
+  const char* text,
+  int y,
+  const GFXfont* font,
+  uint16_t colour
+) {
+
+  tft.setFont(font);
+  tft.setTextColor(colour);
+
+  int16_t x1, y1;
+  uint16_t w, h;
+
+  tft.getTextBounds(
+    text,
+    0,
+    y,
+    &x1,
+    &y1,
+    &w,
+    &h
+  );
+
+  tft.setCursor((SCREEN_W - w) / 2, y);
+  tft.print(text);
+}
+
+// ======================================
+// WALLPAPER & CLOCK
+// ======================================
+
+bool downloadWallpaper(const char* url, const char* path) {
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("[WALLPAPER] Skipped download: WiFi not connected.");
+    return false;
+  }
+
+  Serial.printf("[WALLPAPER] Download started from: %s\n", url);
+
+  WiFiClientSecure client;
+  client.setInsecure();
+  HTTPClient http;
+
+  if (!http.begin(client, url)) {
+    Serial.println("[WALLPAPER] ERROR: HTTPClient.begin failed!");
+    return false;
+  }
+
+  http.setTimeout(10000);
+  int httpCode = http.GET();
+  Serial.printf("[WALLPAPER] HTTP response code: %d\n", httpCode);
+
+  if (httpCode != HTTP_CODE_OK) {
+    Serial.printf("[WALLPAPER] Download failed: server returned HTTP %d\n", httpCode);
+    http.end();
+    return false;
+  }
+
+  String contentType = http.header("Content-Type");
+  int contentLength = http.getSize();
+  Serial.printf("[WALLPAPER] Content-Type: %s, Content-Length: %d bytes\n", contentType.c_str(), contentLength);
+
+  File file = LittleFS.open(path, FILE_WRITE);
+  if (!file) {
+    Serial.println("[WALLPAPER] ERROR: Failed to open LittleFS file for writing!");
+    http.end();
+    return false;
+  }
+
+  WiFiClient* stream = http.getStreamPtr();
+  uint8_t buffer[512];
+  int bytesRead = 0;
+  int totalBytes = 0;
+  bool isJpeg = false;
+
+  while (http.connected() && (bytesRead = stream->readBytes(buffer, sizeof(buffer))) > 0) {
+    if (totalBytes == 0 && bytesRead >= 2) {
+      if (buffer[0] == 0xFF && buffer[1] == 0xD8) {
+        isJpeg = true;
+      }
+    }
+    file.write(buffer, bytesRead);
+    totalBytes += bytesRead;
+  }
+  file.close();
+  http.end();
+
+  Serial.printf("[WALLPAPER] Downloaded %d bytes to %s\n", totalBytes, path);
+
+  if (!isJpeg) {
+    Serial.println("[WALLPAPER] ERROR: Downloaded file header is not valid JPEG (0xFF 0xD8 missing). Removing.");
+    LittleFS.remove(path);
+    return false;
+  }
+
+  if (totalBytes < 1000) {
+    Serial.printf("[WALLPAPER] ERROR: File size (%d bytes) too small for valid 240x240 image. Removing.\n", totalBytes);
+    LittleFS.remove(path);
+    return false;
+  }
+
+  Serial.printf("[WALLPAPER] Successfully cached wallpaper (%d bytes) in LittleFS.\n", totalBytes);
+  return true;
+}
+
+bool renderWallpaper() {
+  if (!LittleFS.exists(WALLPAPER_CACHE_PATH)) {
+    Serial.println("[WALLPAPER] Cached wallpaper not found in LittleFS.");
+    return false;
+  }
+
+  File f = LittleFS.open(WALLPAPER_CACHE_PATH, FILE_READ);
+  if (!f) {
+    Serial.println("[WALLPAPER] Failed to open cached wallpaper for reading.");
+    return false;
+  }
+  size_t fSize = f.size();
+  f.close();
+
+  Serial.printf("[WALLPAPER] Cached file size: %u bytes. Decoding with TJpg_Decoder...\n", (unsigned int)fSize);
+  if (fSize < 1000) {
+    Serial.println("[WALLPAPER] Cached file corrupted/too small. Deleting cache.");
+    LittleFS.remove(WALLPAPER_CACHE_PATH);
+    return false;
+  }
+
+  JRESULT res = TJpgDec.drawFsJpg(0, 0, WALLPAPER_CACHE_PATH, LittleFS);
+  Serial.printf("[WALLPAPER] TJpg_Decoder result: %d (0 = OK)\n", (int)res);
+  return (res == JDR_OK);
+}
+
+void drawClock() {
+  tft.fillRoundRect(42, 86, 156, 70, 10, 0x0842);
+  tft.drawRoundRect(42, 86, 156, 70, 10, 0x2104);
+
+  struct tm timeInfo;
+
+  if (getLocalTime(&timeInfo, 10)) {
+    char timeString[8];
+    strftime(timeString, sizeof(timeString), "%H:%M", &timeInfo);
+    centerText(timeString, 122, &FreeSansBold12pt7b, WHITE);
+
+    char dateString[20];
+    strftime(dateString, sizeof(dateString), "%a, %b %d", &timeInfo);
+    for (int i = 0; dateString[i]; i++) {
+      dateString[i] = toupper((unsigned char)dateString[i]);
+    }
+    centerText(dateString, 146, &FreeSans9pt7b, CYAN);
+  } else {
+    centerText("--:--", 122, &FreeSansBold12pt7b, GREY);
+    centerText("OFFLINE", 146, &FreeSans9pt7b, GREY);
+  }
+
+  lastClockUpdate = millis();
+}
+
+void drawHome() {
+  bool rendered = false;
+  if (LittleFS.exists(WALLPAPER_CACHE_PATH)) {
+    rendered = renderWallpaper();
+  } else if (WiFi.status() == WL_CONNECTED && !wallpaperAttempted) {
+    wallpaperAttempted = true;
+    if (downloadWallpaper(COSMO_WALLPAPER_URL, WALLPAPER_CACHE_PATH)) {
+      rendered = renderWallpaper();
+    }
+  }
+
+  if (!rendered) {
+    tft.fillScreen(BG);
+    tft.drawCircle(120, 120, 114, DARKBLUE);
+    tft.drawCircle(120, 120, 100, 0x10A2);
+  }
+
+  // Header pill with title
+  tft.fillRoundRect(65, 26, 110, 24, 6, 0x0842);
+  centerText(DEVICE_NAME, 43, &FreeSansBold12pt7b, CYAN);
+
+  // Subtitle banner underneath clock
+  tft.fillRoundRect(38, 172, 164, 22, 6, 0x0842);
+  centerText("YOUR LITTLE UNIVERSE", 187, &FreeSans9pt7b, GREY);
+
+  drawClock();
+}
+
+// ======================================
+// APP COLOURS
+// ======================================
+
+uint16_t getAppColour(int index) {
+
+  switch (index) {
+
+    case 0: return BLUE;     // Magic 8 Ball
+    case 1: return PURPLE;   // Akinator
+    case 2: return 0x07E0;   // Snake (Green)
+    case 3: return CYAN;     // Tetris (Cyan)
+    case 4: return DARKBLUE; // Simon Says (Dark Blue)
+    case 5: return YELLOW;   // Reminders (Yellow)
+
+    default: return PURPLE;
+  }
+}
+
+// ======================================
+// COLOR DIMMING (RGB565)
+// ======================================
+
+uint16_t dimColor(uint16_t color, float brightness) {
+  if (brightness >= 0.99f) return color;
+  if (brightness <= 0.01f) return 0;
+
+  uint16_t r = (color >> 11) & 0x1F;
+  uint16_t g = (color >> 5) & 0x3F;
+  uint16_t b = color & 0x1F;
+
+  r = (uint16_t)(r * brightness);
+  g = (uint16_t)(g * brightness);
+  b = (uint16_t)(b * brightness);
+
+  if (r > 0x1F) r = 0x1F;
+  if (g > 0x3F) g = 0x3F;
+  if (b > 0x1F) b = 0x1F;
+
+  return (r << 11) | (g << 5) | b;
+}
+
+// ======================================
+// APP ICON DRAWING
+// ======================================
+
+void drawAppIcon(
+  Adafruit_GFX& g,
+  int index,
+  int x,
+  int y,
+  int radius,
+  float brightness = 1.0f
+) {
+
+  index = (index + APP_COUNT) % APP_COUNT;
+
+  uint16_t baseColour = dimColor(getAppColour(index), brightness);
+  uint16_t whiteColour = dimColor(WHITE, brightness);
+  uint16_t darkBlueColour = dimColor(DARKBLUE, brightness);
+  uint16_t blueColour = dimColor(BLUE, brightness);
+  uint16_t bgColour = dimColor(BG, brightness);
+
+  g.fillCircle(x, y, radius, baseColour);
+  g.drawCircle(x, y, radius, whiteColour);
+
+  if (index == 0) {
+    // Magic 8 Ball
+    g.fillCircle(
+      x, y,
+      radius - 6,
+      darkBlueColour
+    );
+
+    g.setFont(&FreeSansBold12pt7b);
+    g.setTextColor(whiteColour);
+    g.setCursor(x - 8, y + 9);
+    g.print("8");
+  }
+
+  else if (index == 1) {
+    // Akinator
+    g.fillCircle(
+      x, y - 4,
+      radius / 3,
+      whiteColour
+    );
+
+    g.fillCircle(
+      x, y + radius / 3,
+      radius / 2,
+      blueColour
+    );
+
+    g.fillCircle(x - 5, y - 5, 2, bgColour);
+    g.fillCircle(x + 5, y - 5, 2, bgColour);
+  }
+
+  else if (index == 2) {
+    // Snake
+    int s = radius / 3;
+    g.fillRoundRect(x - s, y - s / 2, s * 2, s, 3, dimColor(0x03E0, brightness));
+    g.fillCircle(x + s - 1, y, s / 2 + 1, dimColor(0x7FE0, brightness)); // head
+    g.fillCircle(x - s, y + s / 2, s / 3 + 1, dimColor(0xF800, brightness)); // red apple
+  }
+
+  else if (index == 3) {
+    // Tetris: Classic T-tetromino
+    int b = radius / 3;
+    uint16_t tetrisPurple = dimColor(PURPLE, brightness);
+    g.fillRect(x - b * 3 / 2, y - b, b, b, tetrisPurple);
+    g.fillRect(x - b / 2, y - b, b, b, tetrisPurple);
+    g.fillRect(x + b / 2, y - b, b, b, tetrisPurple);
+    g.fillRect(x - b / 2, y, b, b, tetrisPurple);
+
+    g.drawRect(x - b * 3 / 2, y - b, b, b, whiteColour);
+    g.drawRect(x - b / 2, y - b, b, b, whiteColour);
+    g.drawRect(x + b / 2, y - b, b, b, whiteColour);
+    g.drawRect(x - b / 2, y, b, b, whiteColour);
+  }
+
+  else if (index == 4) {
+    // Simon Says: 4 colored pads
+    int q = radius / 2;
+    g.fillRoundRect(x - q - 2, y - q - 2, q, q, 3, dimColor(0x07E0, brightness)); // Green
+    g.fillRoundRect(x + 2, y - q - 2, q, q, 3, dimColor(0xF800, brightness));     // Red
+    g.fillRoundRect(x - q - 2, y + 2, q, q, 3, dimColor(0xFFE0, brightness));     // Yellow
+    g.fillRoundRect(x + 2, y + 2, q, q, 3, dimColor(0x051F, brightness));         // Blue
+    g.fillCircle(x, y, q / 3 + 1, bgColour);
+  }
+
+  else if (index == 5) {
+    // Reminders
+    g.drawRoundRect(
+      x - radius / 2,
+      y - radius / 2,
+      radius,
+      radius,
+      4,
+      bgColour
+    );
+
+    g.drawLine(
+      x - 7, y - 5,
+      x + 7, y - 5,
+      bgColour
+    );
+
+    g.drawLine(
+      x - 7, y + 4,
+      x + 7, y + 4,
+      bgColour
+    );
+  }
+}
+
+// ======================================
+// EASING
+// ======================================
+
+float easeInOutCubic(float t) {
+
+  if (t < 0.5f) {
+    return 4.0f * t * t * t;
+  }
+
+  float p = -2.0f * t + 2.0f;
+
+  return 1.0f - (p * p * p) / 2.0f;
+}
+
+// ======================================
+// DRAW CAROUSEL INTO CANVAS
+// ======================================
+
+void renderCarousel(float progress) {
+
+  carouselCanvas.fillScreen(BG);
+
+  float offset = 0;
+
+  if (animating) {
+
+    float remaining = 1.0f - progress;
+
+    offset =
+      animationDirection *
+      remaining *
+      CAROUSEL_SPACING;
+  }
+
+  for (int slot = -1; slot <= 1; slot++) {
+
+    int index =
+      (appIndex + slot + APP_COUNT) % APP_COUNT;
+
+    float x =
+      100.0f +
+      slot * CAROUSEL_SPACING +
+      offset;
+
+    float distance = fabs(x - 100.0f);
+
+    float scale = distance / CAROUSEL_SPACING;
+
+    if (scale > 1.0f) {
+      scale = 1.0f;
+    }
+
+    // Centre icon: radius 55.
+    // Side icons: radius 22.
+
+    int radius =
+      55 - (int)(33.0f * scale);
+
+    if (x < -radius || x > CANVAS_W + radius) {
+      continue;
+    }
+
+    // Center icon has scale = 0 -> brightness = 1.0 (100% full brightness)
+    // Side icons have scale = 1 -> brightness = 0.40 (40% brightness, recessed depth)
+    float brightness = 1.0f - (0.60f * scale);
+    if (brightness < 0.40f) brightness = 0.40f;
+    if (brightness > 1.0f) brightness = 1.0f;
+
+    drawAppIcon(
+      carouselCanvas,
+      index,
+      (int)x,
+      65,
+      radius,
+      brightness
+    );
+  }
+}
+// ======================================
+// TRANSFER CANVAS TO TFT
+// ======================================
+
+void presentCarousel() {
+
+  if (!canvasAvailable) {
+    return;
+  }
+
+  tft.drawRGBBitmap(
+    CANVAS_X,
+    CANVAS_Y,
+    carouselCanvas.getBuffer(),
+    CANVAS_W,
+    CANVAS_H
+  );
+}
+
+// ======================================
+// CAROUSEL DETAILS
+// ======================================
+
+void drawCarouselDetails() {
+
+  tft.fillRect(43, 164, 154, 26, BG);
+
+  centerText(
+  appNames[appIndex],
+  181,
+  &FreeSans9pt7b,
+  WHITE
+);
+    
+
+  tft.fillRect(82, 190, 76, 17, BG);
+
+  for (int i = 0; i < APP_COUNT; i++) {
+
+    uint16_t colour =
+      (i == appIndex) ? CYAN : GREY;
+
+    int radius =
+      (i == appIndex) ? 3 : 2;
+
+    tft.fillCircle(
+      92 + i * 11,
+      198,
+      radius,
+      colour
+    );
+  }
+}
+
+// ======================================
+// DRAW LAUNCHER
+// ======================================
+
+void drawLauncher() {
+
+  tft.fillScreen(BG);
+
+  animating = false;
+
+  renderCarousel(1.0f);
+  presentCarousel();
+
+  drawCarouselDetails();
+}
+
+// ======================================
+// START ANIMATION
+// ======================================
+
+void moveCarousel(int direction) {
+
+  if (animating) {
+    return;
+  }
+
+  animationDirection = direction;
+
+  appIndex =
+    (appIndex + direction + APP_COUNT) % APP_COUNT;
+
+  animating = true;
+
+  animationStart = millis();
+  lastAnimationFrame = 0;
+
+  lastInteraction = millis();
+
+  drawCarouselDetails();
+
+  renderCarousel(0.0f);
+  presentCarousel();
+}
+
+// ======================================
+// UPDATE ANIMATION
+// ======================================
+
+void updateCarouselAnimation() {
+
+  if (!animating) {
+    return;
+  }
+
+  unsigned long now = millis();
+
+  if (
+    now - lastAnimationFrame <
+    FRAME_INTERVAL
+  ) {
+    return;
+  }
+
+  lastAnimationFrame = now;
+
+  float progress =
+    (float)(now - animationStart) /
+    (float)ANIMATION_DURATION;
+
+  if (progress >= 1.0f) {
+
+    progress = 1.0f;
+
+    animating = false;
+
+    renderCarousel(1.0f);
+    presentCarousel();
+
+    return;
+  }
+
+  float eased = easeInOutCubic(progress);
+
+  renderCarousel(eased);
+  presentCarousel();
+}
+
+// ======================================
+// MAGIC 8 BALL
+// ======================================
+
+void drawMagicScreen() {
+
+  tft.fillScreen(BG);
+
+  centerText(
+    "MAGIC 8 BALL",
+    53,
+    &FreeSansBold12pt7b,
+    CYAN
+  );
+
+  tft.drawCircle(120, 110, 55, WHITE);
+  tft.drawCircle(120, 110, 51, GREY);
+
+  centerText(
+    "8",
+    119,
+    &FreeSansBold12pt7b,
+    WHITE
+  );
+
+  tft.fillRoundRect(
+    61, 153,
+    118, 32,
+    8,
+    BLUE
+  );
+
+  centerText(
+    "PRESS SELECT",
+    174,
+    &FreeSans9pt7b,
+    WHITE
+  );
+}
+
+// ======================================
+// MAGIC 8 BALL THINKING
+// ======================================
+
+void thinkingAnimation() {
+
+  for (int i = 0; i < 4; i++) {
+
+    tft.fillScreen(BG);
+
+    tft.drawCircle(120, 108, 55, CYAN);
+    tft.drawCircle(120, 108, 43, BLUE);
+
+    centerText(
+      "8",
+      117,
+      &FreeSansBold12pt7b,
+      WHITE
+    );
+
+    centerText(
+      "THINKING...",
+      175,
+      &FreeSans9pt7b,
+      CYAN
+    );
+
+    delay(220);
+  }
+}
+
+// ======================================
+// MAGIC 8 BALL ANSWER
+// ======================================
+
+void showAnswer(const char* answer) {
+
+  tft.fillScreen(BG);
+
+  tft.drawCircle(120, 108, 63, CYAN);
+  tft.drawCircle(120, 108, 57, BLUE);
+
+  tft.fillRoundRect(
+    48, 67,
+    144, 83,
+    10,
+    BLUE
+  );
+
+  String remaining = answer;
+  String line = "";
+
+  int y = 98;
+  int lines = 0;
+
+  while (
+    remaining.length() > 0 &&
+    lines < 3
+  ) {
+
+    int split = remaining.indexOf(' ');
+
+    String word;
+
+    if (split == -1) {
+      word = remaining;
+      remaining = "";
+    } else {
+      word = remaining.substring(0, split);
+      remaining = remaining.substring(split + 1);
+    }
+
+    String testLine =
+      line.length() == 0
+      ? word
+      : line + " " + word;
+
+    tft.setFont(&FreeSans9pt7b);
+
+    int16_t x1, y1;
+    uint16_t w, h;
+
+    tft.getTextBounds(
+      testLine.c_str(),
+      0, 0,
+      &x1, &y1,
+      &w, &h
+    );
+
+    if (w > 124 && line.length() > 0) {
+
+      centerText(
+        line.c_str(),
+        y,
+        &FreeSans9pt7b,
+        WHITE
+      );
+
+      y += 19;
+      lines++;
+
+      line = word;
+
+    } else {
+
+      line = testLine;
+    }
+  }
+
+  if (line.length() > 0 && lines < 3) {
+
+    centerText(
+      line.c_str(),
+      y,
+      &FreeSans9pt7b,
+      WHITE
+    );
+  }
+
+  centerText(
+    "SELECT: ASK AGAIN",
+    184,
+    &FreeSans9pt7b,
+    CYAN
+  );
+}
+
+// ======================================
+// PLACEHOLDER APPS
+// ======================================
+
+void drawPlaceholder(
+  const char* title,
+  const char* subtitle
+) {
+
+  tft.fillScreen(BG);
+
+  centerText(
+    title,
+    98,
+    &FreeSansBold12pt7b,
+    CYAN
+  );
+
+  centerText(
+    subtitle,
+    130,
+    &FreeSans9pt7b,
+    WHITE
+  );
+
+  centerText(
+    "IN DEVELOPMENT",
+    160,
+    &FreeSans9pt7b,
+    PURPLE
+  );
+}
+
+// ======================================
+// OPEN APP
+// ======================================
+
+void openApp() {
+
+  screen = APP;
+  lastInteraction = millis();
+
+  switch (appIndex) {
+
+    case 0:
+      drawMagicScreen();
+      break;
+
+    case 1:
+      akinator.init(AKINATOR_SERVER_URL);
+      break;
+
+    case 2:
+      snake.init();
+      break;
+
+    case 3:
+      tetris.init();
+      break;
+
+    case 4:
+      simon.resetExit();
+      simon.init();
+      break;
+
+    case 5:
+      drawPlaceholder("REMINDERS", "DAILY TASKS");
+      break;
+  }
+}
+
+// ======================================
+// NAVIGATION
+// ======================================
+
+void goHome() {
+
+  screen = HOME;
+  animating = false;
+
+  lastInteraction = millis();
+
+  drawHome();
+}
+
+void goLauncher() {
+
+  screen = LAUNCHER;
+  animating = false;
+
+  lastInteraction = millis();
+
+  drawLauncher();
+}
+
+// ======================================
+// WIFI
+// ======================================
+
+void connectWiFi() {
+
+  Serial.println("Starting WiFi...");
+
+  WiFi.persistent(false);
+  WiFi.mode(WIFI_STA);
+  WiFi.setAutoReconnect(true);
+  WiFi.setSleep(false);
+
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+
+  unsigned long start = millis();
+
+  while (
+    WiFi.status() != WL_CONNECTED &&
+    millis() - start < 12000
+  ) {
+
+    delay(300);
+    Serial.print(".");
+  }
+
+  Serial.println();
+
+  if (WiFi.status() == WL_CONNECTED) {
+
+    Serial.println("WiFi connected!");
+    Serial.println(WiFi.localIP());
+
+    configTime(
+      GMT_OFFSET,
+      DAYLIGHT_OFFSET,
+      "pool.ntp.org",
+      "time.google.com"
+    );
+
+  } else {
+
+    Serial.println("WiFi connection failed.");
+  }
+
+  lastWiFiAttempt = millis();
+}
+
+void maintainWiFi() {
+
+  if (WiFi.status() == WL_CONNECTED) {
+    return;
+  }
+
+  if (
+    millis() - lastWiFiAttempt >=
+    WIFI_RETRY
+  ) {
+
+    lastWiFiAttempt = millis();
+
+    Serial.println("Reconnecting WiFi...");
+
+    WiFi.reconnect();
+  }
+}
+
+// ======================================
+// SETUP
+// ======================================
+
+void setup() {
+
+  Serial.begin(115200);
+
+  pinMode(BTN_LEFT, INPUT_PULLUP);
+  pinMode(BTN_RIGHT, INPUT_PULLUP);
+  pinMode(BTN_SELECT, INPUT_PULLUP);
+
+  Serial.println("Starting COSMO...");
+
+  tft.begin();
+  tft.setRotation(2);
+  tft.setTextWrap(false);
+
+  tft.fillScreen(BG);
+
+  // Check that the canvas successfully allocated memory.
+  canvasAvailable =
+    carouselCanvas.getBuffer() != nullptr;
+
+  if (!canvasAvailable) {
+
+    Serial.println(
+      "ERROR: Carousel canvas allocation failed!"
+    );
+
+    while (true) {
+      delay(1000);
+    }
+  }
+
+  Serial.println("Carousel canvas ready.");
+
+  if (!LittleFS.begin(true)) {
+    Serial.println("LittleFS mount failed, formatting...");
+  } else {
+    Serial.println("LittleFS mounted.");
+  }
+
+  TJpgDec.setJpgScale(1);
+  TJpgDec.setSwapBytes(true);
+  TJpgDec.setCallback(tjpgOutput);
+
+  randomSeed(esp_random());
+
+  connectWiFi();
+
+  lastInteraction = millis();
+
+  drawHome();
+
+  Serial.println("COSMO READY!");
+}
+
+// ======================================
+// MAIN LOOP
+// ======================================
+
+void loop() {
+
+  maintainWiFi();
+
+  updateButtons();
+
+  // ==================================
+  // RETURN HOME / EXIT APP: BOTH BUTTONS
+  // ==================================
+
+  if (screen == LAUNCHER && bothHeld()) {
+    waitForButtonRelease();
+    goHome();
+    return;
+  }
+
+  if (screen == APP) {
+    if (appIndex == 4) {
+      // Simon Says: ONLY exit on Game Over screen if Left + Right is pressed
+      if (simon.wantsToExit()) {
+        simon.resetExit();
+        waitForButtonRelease();
+        goLauncher();
+        return;
+      }
+    } else {
+      // Magic 8 Ball (0), Akinator (1), Snake (2), Tetris (3), Reminders (5)
+      if (bothHeld()) {
+        waitForButtonRelease();
+        goLauncher();
+        return;
+      }
+    }
+  }
+
+  // ==================================
+  // HOME
+  // ==================================
+
+  if (screen == HOME) {
+
+    if (selectPressed) {
+
+      goLauncher();
+      return;
+    }
+
+    if (
+      millis() - lastClockUpdate >= 1000
+    ) {
+
+      drawClock();
+    }
+
+    return;
+  }
+
+  // ==================================
+  // LAUNCHER
+  // ==================================
+
+  if (screen == LAUNCHER) {
+
+    if (animating) {
+
+      updateCarouselAnimation();
+      return;
+    }
+
+    if (leftPressed) {
+
+      moveCarousel(-1);
+      return;
+    }
+
+    if (rightPressed) {
+
+      moveCarousel(1);
+      return;
+    }
+
+    if (selectPressed) {
+
+      lastInteraction = millis();
+
+      openApp();
+      return;
+    }
+  }
+
+  // ==================================
+  // APPS
+  // ==================================
+
+  if (screen == APP) {
+
+    // Magic 8 Ball (0)
+    if (
+      appIndex == 0 &&
+      selectPressed
+    ) {
+
+      lastInteraction = millis();
+
+      thinkingAnimation();
+
+      int index = random(ANSWER_COUNT);
+
+      showAnswer(answers[index]);
+
+      return;
+    }
+
+    // Akinator (1)
+    if (appIndex == 1) {
+      akinator.update(leftPressed, rightPressed, selectPressed);
+      if (leftPressed || rightPressed || selectPressed || akinator.isActive()) {
+        lastInteraction = millis();
+      }
+      return;
+    }
+
+    // Snake (2)
+    if (appIndex == 2) {
+      snake.update(leftPressed, rightPressed, selectPressed);
+      if (leftPressed || rightPressed || selectPressed || snake.isActive()) {
+        lastInteraction = millis();
+      }
+      return;
+    }
+
+    // Tetris (3)
+    if (appIndex == 3) {
+      tetris.update(leftPressed, rightPressed, selectPressed);
+      if (leftPressed || rightPressed || selectPressed || tetris.isActive()) {
+        lastInteraction = millis();
+      }
+      return;
+    }
+
+    // Simon Says (4)
+    if (appIndex == 4) {
+      simon.update(leftPressed, rightPressed, selectPressed);
+      if (simon.wantsToExit()) {
+        simon.resetExit();
+        waitForButtonRelease();
+        goLauncher();
+        return;
+      }
+      if (leftPressed || rightPressed || selectPressed || simon.isActive()) {
+        lastInteraction = millis();
+      }
+      return;
+    }
+
+    // Placeholder: Reminders (5)
+    if (appIndex == 5) {
+      if (
+        leftPressed ||
+        rightPressed ||
+        selectPressed
+      ) {
+        lastInteraction = millis();
+      }
+    }
+  }
+
+  // ==================================
+  // IDLE TIMEOUT
+  // ==================================
+
+  bool inActiveGame = (screen == APP && (
+    (appIndex == 1 && akinator.isActive()) ||
+    (appIndex == 2 && snake.isActive()) ||
+    (appIndex == 3 && tetris.isActive()) ||
+    (appIndex == 4 && simon.isActive())
+  ));
+
+  if (
+    screen != HOME &&
+    !inActiveGame &&
+    millis() - lastInteraction >= IDLE_TIMEOUT
+  ) {
+
+    goHome();
+  }
+}
