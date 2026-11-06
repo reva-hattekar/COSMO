@@ -36,15 +36,24 @@ RemindersApp::RemindersApp(Adafruit_GC9A01A& display)
     needsRedraw(true),
     syncing(false),
     syncDone(false),
+    dataMutex(NULL),
     stagingResult(SYNC_RES_NONE),
     stagingCount(0),
     stagingSyncState(REMINDERS_SYNC_NEVER),
     syncTaskHandle(NULL) {
+  dataMutex = xSemaphoreCreateMutex();
   memset(items, 0, sizeof(items));
   memset(stagingItems, 0, sizeof(stagingItems));
   snprintf(statusMessage, sizeof(statusMessage), "Initializing...");
   strncpy(backendUrl, "https://cosmo-pcju.onrender.com/api/google/reminders", sizeof(backendUrl) - 1);
   backendUrl[sizeof(backendUrl) - 1] = '\0';
+}
+
+RemindersApp::~RemindersApp() {
+  if (dataMutex) {
+    vSemaphoreDelete(dataMutex);
+    dataMutex = NULL;
+  }
 }
 
 void RemindersApp::setBackendUrl(const char* url) {
@@ -89,34 +98,45 @@ void RemindersApp::resetExit() {
 void RemindersApp::maintain(bool wifiConnected) {
   // Handle completion of background sync task safely on main thread
   if (syncDone) {
-    syncDone = false;
-    Serial.printf("[REMINDERS] Background sync completed with result code: %d\n", (int)stagingResult);
+    if (dataMutex && xSemaphoreTake(dataMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+      syncDone = false;
+      SyncTaskResult res = stagingResult;
+      int count = stagingCount;
+      String payload = stagingPayload;
+      stagingPayload = ""; // Immediately reclaim JSON payload string from RAM
 
-    if (stagingResult == SYNC_RES_OK) {
-      saveCachedFeed(stagingPayload);
-      memcpy(items, stagingItems, sizeof(items));
-      itemCount = stagingCount;
-      if (currentIndex >= itemCount) currentIndex = 0;
-      syncState = REMINDERS_SYNC_OK_LIVE;
-      lastSyncTimestamp = time(nullptr);
-      snprintf(statusMessage, sizeof(statusMessage), "Live Sync OK");
-      needsRedraw = true;
-    } else if (stagingResult == SYNC_RES_UNAUTH) {
-      syncState = REMINDERS_SYNC_UNAUTH;
-      snprintf(statusMessage, sizeof(statusMessage), "Google account not linked");
-      needsRedraw = true;
-    } else if (stagingResult == SYNC_RES_FAIL) {
-      if (itemCount == 0) {
-        loadCachedFeed();
+      if (res == SYNC_RES_OK) {
+        memcpy(items, stagingItems, sizeof(items));
+        itemCount = count;
+        if (currentIndex >= itemCount) currentIndex = 0;
+        syncState = REMINDERS_SYNC_OK_LIVE;
+        lastSyncTimestamp = time(nullptr);
+        snprintf(statusMessage, sizeof(statusMessage), "Live Sync OK");
+        needsRedraw = true;
+      } else if (res == SYNC_RES_UNAUTH) {
+        syncState = REMINDERS_SYNC_UNAUTH;
+        snprintf(statusMessage, sizeof(statusMessage), "Google account not linked");
+        needsRedraw = true;
+      } else if (res == SYNC_RES_FAIL) {
+        if (itemCount == 0) {
+          loadCachedFeed();
+        }
+        if (itemCount > 0) {
+          syncState = REMINDERS_SYNC_OK_CACHED;
+          snprintf(statusMessage, sizeof(statusMessage), "Sync failed (cached)");
+        } else {
+          syncState = REMINDERS_SYNC_FAILED;
+          snprintf(statusMessage, sizeof(statusMessage), "Sync failed");
+        }
+        needsRedraw = true;
       }
-      if (itemCount > 0) {
-        syncState = REMINDERS_SYNC_OK_CACHED;
-        snprintf(statusMessage, sizeof(statusMessage), "Sync failed (cached)");
-      } else {
-        syncState = REMINDERS_SYNC_FAILED;
-        snprintf(statusMessage, sizeof(statusMessage), "Sync failed");
+
+      xSemaphoreGive(dataMutex);
+
+      // Save to LittleFS strictly on main thread outside mutex
+      if (res == SYNC_RES_OK && payload.length() > 0) {
+        saveCachedFeed(payload);
       }
-      needsRedraw = true;
     }
   }
 
@@ -167,14 +187,23 @@ void RemindersApp::syncTaskTrampoline(void* param) {
 
 void RemindersApp::runSyncTask() {
   Serial.printf("[REMINDERS] Non-blocking background sync starting: %s\n", backendUrl);
+  Serial.printf("[REMINDERS] Free Heap before TLS handshake: %u bytes\n", ESP.getFreeHeap());
+
+  time_t now = time(nullptr);
+  if (now < 1700000000) {
+    Serial.println("[REMINDERS] NTP time became invalid. Deferring sync.");
+    if (dataMutex) xSemaphoreTake(dataMutex, portMAX_DELAY);
+    stagingResult = SYNC_RES_FAIL;
+    syncDone = true;
+    syncing = false;
+    syncTaskHandle = NULL;
+    if (dataMutex) xSemaphoreGive(dataMutex);
+    vTaskDelete(NULL);
+    return;
+  }
 
   WiFiClientSecure client;
-  time_t now = time(nullptr);
-  if (now >= 1700000000) {
-    client.setCACert(GITHUB_ROOT_CA);
-  } else {
-    client.setInsecure();
-  }
+  client.setCACert(GITHUB_ROOT_CA);
   client.setTimeout(12);
 
   HTTPClient http;
@@ -188,10 +217,12 @@ void RemindersApp::runSyncTask() {
   if (!http.begin(client, backendUrl)) {
     Serial.println("[REMINDERS] ERROR: HTTPClient.begin failed!");
     client.stop();
+    if (dataMutex) xSemaphoreTake(dataMutex, portMAX_DELAY);
     stagingResult = SYNC_RES_FAIL;
-    syncing = false;
     syncDone = true;
+    syncing = false;
     syncTaskHandle = NULL;
+    if (dataMutex) xSemaphoreGive(dataMutex);
     vTaskDelete(NULL);
     return;
   }
@@ -199,42 +230,58 @@ void RemindersApp::runSyncTask() {
   int httpCode = http.GET();
   Serial.printf("[REMINDERS] HTTP status code: %d\n", httpCode);
 
+  ReminderEntry parsedItems[MAX_REMINDERS];
+  int parsedCount = 0;
+  RemindersSyncState parsedState = REMINDERS_SYNC_FAILED;
+  SyncTaskResult taskResult = SYNC_RES_FAIL;
+  String payload = "";
+
   if (httpCode == HTTP_CODE_OK) {
-    String payload = http.getString();
+    payload = http.getString();
     http.end();
     client.stop();
 
-    ReminderEntry parsedItems[MAX_REMINDERS];
-    int parsedCount = 0;
-    RemindersSyncState parsedState = REMINDERS_SYNC_FAILED;
-
     if (parseRemindersJson(payload, parsedItems, parsedCount, parsedState)) {
-      memcpy(stagingItems, parsedItems, sizeof(stagingItems));
-      stagingCount = parsedCount;
-      stagingSyncState = parsedState;
-      stagingPayload = payload;
-      stagingResult = SYNC_RES_OK;
+      taskResult = SYNC_RES_OK;
     } else if (parsedState == REMINDERS_SYNC_UNAUTH) {
-      stagingSyncState = REMINDERS_SYNC_UNAUTH;
-      stagingResult = SYNC_RES_UNAUTH;
+      taskResult = SYNC_RES_UNAUTH;
     } else {
-      stagingResult = SYNC_RES_FAIL;
+      taskResult = SYNC_RES_FAIL;
     }
   } else if (httpCode == HTTP_CODE_UNAUTHORIZED || httpCode == HTTP_CODE_FORBIDDEN) {
     http.end();
     client.stop();
-    stagingSyncState = REMINDERS_SYNC_UNAUTH;
-    stagingResult = SYNC_RES_UNAUTH;
+    parsedState = REMINDERS_SYNC_UNAUTH;
+    taskResult = SYNC_RES_UNAUTH;
   } else {
     Serial.printf("[REMINDERS] HTTP request failed with code %d\n", httpCode);
     http.end();
     client.stop();
-    stagingResult = SYNC_RES_FAIL;
+    taskResult = SYNC_RES_FAIL;
   }
 
-  syncing = false;
+  // Atomically update staging data under mutex
+  if (dataMutex) xSemaphoreTake(dataMutex, portMAX_DELAY);
+  stagingResult = taskResult;
+  stagingSyncState = parsedState;
+  if (taskResult == SYNC_RES_OK) {
+    memcpy(stagingItems, parsedItems, sizeof(stagingItems));
+    stagingCount = parsedCount;
+    stagingPayload = payload;
+  } else {
+    stagingCount = 0;
+    stagingPayload = "";
+  }
   syncDone = true;
+  syncing = false;
   syncTaskHandle = NULL;
+  if (dataMutex) xSemaphoreGive(dataMutex);
+
+  UBaseType_t stackHighWaterMarkWords = uxTaskGetStackHighWaterMark(NULL);
+  size_t stackRemainingBytes = stackHighWaterMarkWords * sizeof(StackType_t);
+  Serial.printf("[REMINDERS] Sync task completed successfully. Stack remaining: %u bytes (high-water mark)\n",
+                (unsigned int)stackRemainingBytes);
+
   vTaskDelete(NULL);
 }
 
@@ -246,8 +293,19 @@ bool RemindersApp::syncFeed(bool force) {
     return false;
   }
 
-  if (syncing) {
-    Serial.println("[REMINDERS] Sync already in progress, skipping.");
+  // Defer request if NTP time is not yet synchronized
+  time_t now = time(nullptr);
+  if (now < 1700000000) {
+    Serial.println("[REMINDERS] NTP time not yet synchronized. Deferring HTTPS sync.");
+    if (syncState == REMINDERS_SYNC_NEVER) {
+      loadCachedFeed();
+    }
+    return false;
+  }
+
+  // Strictly enforce only one synchronization task running at a time
+  if (syncing || syncTaskHandle != NULL) {
+    Serial.println("[REMINDERS] Sync task already active, skipping duplicate request.");
     return false;
   }
 
@@ -258,16 +316,17 @@ bool RemindersApp::syncFeed(bool force) {
   BaseType_t res = xTaskCreatePinnedToCore(
     syncTaskTrampoline,
     "remSyncTask",
-    8192,
+    10240,       // 10 KB stack for TLS handshake + mbedtls + JSON parse
     this,
-    1,
+    1,           // Priority 1 (normal background priority)
     &syncTaskHandle,
-    0
+    0            // Run on Core 0 (leaving Core 1 dedicated to loop/TFT)
   );
 
   if (res != pdPASS) {
     Serial.println("[REMINDERS] ERROR: Failed to create background sync task!");
     syncing = false;
+    syncTaskHandle = NULL;
     return false;
   }
 

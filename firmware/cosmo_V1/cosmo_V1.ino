@@ -67,6 +67,7 @@ uint32_t tjpgCallbackCount = 0;
 #define CLOCK_BG_H 56
 
 static uint16_t* s_clockBg = nullptr;
+static bool s_clockBgValid = false;
 static char s_lastTimeString[8] = "";
 static char s_lastDateString[20] = "";
 
@@ -445,15 +446,16 @@ bool checkAndUpdateWallpaper(const char* url, const char* path) {
     return false;
   }
 
+  time_t now = time(nullptr);
+  if (now < 1700000000) {
+    Serial.println("[WALLPAPER] NTP time not yet synchronized. Deferring HTTPS wallpaper check.");
+    return false;
+  }
+
   Serial.println("[WALLPAPER] Checking cloud wallpaper for updates...");
 
   WiFiClientSecure client;
-  time_t now = time(nullptr);
-  if (now >= 1700000000) {
-    client.setCACert(GITHUB_ROOT_CA);
-  } else {
-    client.setInsecure();
-  }
+  client.setCACert(GITHUB_ROOT_CA);
   client.setTimeout(10);
 
   HTTPClient http;
@@ -639,10 +641,12 @@ bool renderWallpaper() {
 
   if (decRes == JDR_OK && tjpgCallbackCount > 0) {
     Serial.println("[WALLPAPER] SUCCESS: Wallpaper rendered completely on display.");
+    s_clockBgValid = true;
     return true;
   }
 
   Serial.printf("[WALLPAPER] Render FAILED: decRes=%d, callbacks=%u. Falling back.\n", (int)decRes, tjpgCallbackCount);
+  s_clockBgValid = false;
   return false;
 }
 
@@ -666,7 +670,7 @@ void drawClock(bool force = false) {
     }
 
     // Erase previous text and restore background before redrawing
-    if (wallpaperLoaded && s_clockBg != nullptr) {
+    if (wallpaperLoaded && s_clockBg != nullptr && s_clockBgValid) {
       tft.drawRGBBitmap(CLOCK_BG_X, CLOCK_BG_Y, s_clockBg, CLOCK_BG_W, CLOCK_BG_H);
     } else {
       tft.fillRect(CLOCK_BG_X, CLOCK_BG_Y, CLOCK_BG_W, CLOCK_BG_H, BG);
@@ -917,45 +921,25 @@ bool runNetworkDiagnostics(const char* host, IPAddress& outIP) {
   }
 
   // 5. TLS Handshake Probe (WiFiClientSecure)
-  Serial.println("[NET-DIAG] 5. Probing TLS handshake with GitHub Root CA...");
-  WiFiClientSecure secProbe;
-  secProbe.setTimeout(8);
-  if (now >= 1700000000) {
+  Serial.println("[NET-DIAG] 5. Probing TLS handshake with Root CA...");
+  if (now < 1700000000) {
+    Serial.println("[NET-DIAG]    - NTP time not yet synchronized. TLS verification deferred.");
+  } else {
+    WiFiClientSecure secProbe;
+    secProbe.setTimeout(8);
     secProbe.setCACert(GITHUB_ROOT_CA);
-  } else {
-    secProbe.setInsecure();
-  }
 
-  unsigned long tlsStart = millis();
-  bool tlsOk = secProbe.connect(host, 443);
-  unsigned long tlsDuration = millis() - tlsStart;
+    unsigned long tlsStart = millis();
+    bool tlsOk = secProbe.connect(host, 443);
+    unsigned long tlsDuration = millis() - tlsStart;
 
-  if (tlsOk) {
-    Serial.printf("[NET-DIAG]    - TLS Handshake SUCCESS with Root CA in %lu ms.\n", tlsDuration);
-    secProbe.stop();
-  } else {
-    char lastErr[128] = {0};
-    secProbe.lastError(lastErr, sizeof(lastErr));
-    Serial.printf("[NET-DIAG]    - TLS Handshake FAILED with Root CA in %lu ms. Error: %s\n", tlsDuration, lastErr);
-
-    // Isolate whether failure was due to CA certificate verification
-    Serial.println("[NET-DIAG]    - Testing TLS with setInsecure() to isolate certificate vs network/RAM issue...");
-    WiFiClientSecure insecProbe;
-    insecProbe.setTimeout(8);
-    insecProbe.setInsecure();
-    unsigned long insecStart = millis();
-    bool insecOk = insecProbe.connect(host, 443);
-    unsigned long insecDuration = millis() - insecStart;
-
-    if (insecOk) {
-      Serial.printf("[NET-DIAG]    - TLS with setInsecure() SUCCEEDED in %lu ms!\n", insecDuration);
-      Serial.println("[NET-DIAG] DIAGNOSIS: TLS failure is specifically caused by CA Certificate validation (chain depth or date mismatch).");
-      insecProbe.stop();
+    if (tlsOk) {
+      Serial.printf("[NET-DIAG]    - TLS Handshake SUCCESS with Root CA in %lu ms.\n", tlsDuration);
+      secProbe.stop();
     } else {
-      char insecErr[128] = {0};
-      insecProbe.lastError(insecErr, sizeof(insecErr));
-      Serial.printf("[NET-DIAG]    - TLS with setInsecure() ALSO FAILED in %lu ms. Error: %s\n", insecDuration, insecErr);
-      Serial.println("[NET-DIAG] DIAGNOSIS: TLS failure is caused by socket/memory/ciphersuite rejection, not CA certificate validation.");
+      char lastErr[128] = {0};
+      secProbe.lastError(lastErr, sizeof(lastErr));
+      Serial.printf("[NET-DIAG]    - TLS Handshake FAILED with Root CA in %lu ms. Error: %s\n", tlsDuration, lastErr);
     }
   }
 
@@ -979,13 +963,14 @@ bool downloadIcon(int index) {
   Serial.printf("[ICON-DOWNLOAD] URL: %s\n", url);
   Serial.printf("[ICON-DOWNLOAD] Free Heap before request: %u bytes\n", ESP.getFreeHeap());
 
-  WiFiClientSecure client;
   time_t now = time(nullptr);
-  if (now >= 1700000000) {
-    client.setCACert(GITHUB_ROOT_CA);
-  } else {
-    client.setInsecure();
+  if (now < 1700000000) {
+    Serial.println("[ICON-DOWNLOAD] NTP time not yet synchronized. Deferring HTTPS icon download.");
+    return false;
   }
+
+  WiFiClientSecure client;
+  client.setCACert(GITHUB_ROOT_CA);
   client.setTimeout(10);
 
   HTTPClient http;
@@ -1921,10 +1906,10 @@ void setup() {
   if (!s_clockBg) {
     s_clockBg = (uint16_t*)malloc(CLOCK_BG_W * CLOCK_BG_H * sizeof(uint16_t));
     if (s_clockBg) {
-      Serial.printf("[DISPLAY] Allocated %u bytes for clock background clearing cache.\n",
-                    (unsigned int)(CLOCK_BG_W * CLOCK_BG_H * sizeof(uint16_t)));
+      Serial.printf("[DISPLAY] Allocated %u bytes for clock background clearing cache. Free Heap: %u bytes\n",
+                    (unsigned int)(CLOCK_BG_W * CLOCK_BG_H * sizeof(uint16_t)), ESP.getFreeHeap());
     } else {
-      Serial.println("[DISPLAY] WARNING: Failed to allocate clock background clearing cache.");
+      Serial.println("[DISPLAY] WARNING: Failed to allocate clock background clearing cache. Fallback active.");
     }
   }
 
@@ -1957,7 +1942,7 @@ void setup() {
     if (time(nullptr) >= 1700000000) {
       Serial.println("[NTP] Clock synchronized successfully.");
     } else {
-      Serial.println("[NTP] Clock sync timed out; continuing (TLS fallback active).");
+      Serial.println("[NTP] Clock sync pending; HTTPS requests will be deferred until NTP completes.");
     }
 
     // Check remote wallpaper for any cloud updates
@@ -1970,7 +1955,8 @@ void setup() {
 
   drawHome();
 
-  Serial.println("COSMO READY!");
+  Serial.printf("[SYSTEM] COSMO READY! Post-boot Free Heap: %u bytes, Min Ever Free Heap: %u bytes\n",
+                ESP.getFreeHeap(), ESP.getMinFreeHeap());
 }
 
 // ======================================

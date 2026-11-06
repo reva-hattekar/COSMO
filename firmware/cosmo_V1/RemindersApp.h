@@ -50,6 +50,7 @@ enum SyncTaskResult {
 class RemindersApp {
 public:
   RemindersApp(Adafruit_GC9A01A& display);
+  ~RemindersApp();
 
   void init();
   void update(bool left, bool right, bool select);
@@ -84,9 +85,10 @@ private:
   bool initialized;
   bool needsRedraw;
 
-  // Background non-blocking synchronization
+  // Background non-blocking synchronization & FreeRTOS safety
   volatile bool syncing;
   volatile bool syncDone;
+  SemaphoreHandle_t dataMutex;
   SyncTaskResult stagingResult;
   ReminderEntry stagingItems[MAX_REMINDERS];
   int stagingCount;
