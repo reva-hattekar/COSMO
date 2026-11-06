@@ -1,8 +1,9 @@
 const express = require('express');
 const router = express.Router();
 const googleService = require('../services/googleService');
+const { requireApiKey } = require('../middleware/auth');
 
-// GET /api/google/auth: Initiate OAuth flow
+// GET /api/google/auth: Initiate OAuth flow with CSRF state protection
 router.get('/auth', (req, res) => {
     if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
         return res.status(500).json({
@@ -11,16 +12,18 @@ router.get('/auth', (req, res) => {
         });
     }
 
-    const authUrl = googleService.getAuthUrl();
+    const state = googleService.generateOAuthState();
+    const authUrl = googleService.getAuthUrl(state);
+
     if (req.query.format === 'json') {
-        return res.json({ authUrl });
+        return res.json({ authUrl, state });
     }
     res.redirect(authUrl);
 });
 
-// GET /api/google/callback: OAuth redirect handler
+// GET /api/google/callback: OAuth redirect handler with state validation
 router.get('/callback', async (req, res) => {
-    const { code, error } = req.query;
+    const { code, state, error } = req.query;
 
     if (error) {
         return res.status(400).send(`
@@ -29,6 +32,19 @@ router.get('/callback', async (req, res) => {
                     <h1>Authentication Failed</h1>
                     <p>${error}</p>
                     <a href="/api/google/auth" style="color: #38bdf8;">Try Again</a>
+                </body>
+            </html>
+        `);
+    }
+
+    // Validate OAuth state to prevent CSRF and replay attacks
+    if (!state || !googleService.validateOAuthState(state)) {
+        return res.status(403).send(`
+            <html>
+                <body style="font-family: sans-serif; background: #0f172a; color: #ef4444; padding: 40px; text-align: center;">
+                    <h1>Security Verification Failed</h1>
+                    <p>Invalid or expired OAuth state parameter. Please restart the authorization flow.</p>
+                    <a href="/api/google/auth" style="color: #38bdf8;">Restart Sign In</a>
                 </body>
             </html>
         `);
@@ -63,7 +79,7 @@ router.get('/callback', async (req, res) => {
     }
 });
 
-// GET /api/google/status: Check auth & configuration status
+// GET /api/google/status: Check auth & configuration status (public for health monitoring)
 router.get('/status', async (req, res) => {
     try {
         const status = await googleService.getStatus();
@@ -73,8 +89,8 @@ router.get('/status', async (req, res) => {
     }
 });
 
-// GET /api/google/calendar: Raw/formatted calendar events
-router.get('/calendar', async (req, res) => {
+// GET /api/google/calendar: Raw/formatted calendar events (protected by API key if configured)
+router.get('/calendar', requireApiKey, async (req, res) => {
     try {
         const limit = parseInt(req.query.limit, 10) || 10;
         const events = await googleService.getCalendarEvents(limit);
@@ -87,8 +103,8 @@ router.get('/calendar', async (req, res) => {
     }
 });
 
-// GET /api/google/tasks: Raw/formatted tasks
-router.get('/tasks', async (req, res) => {
+// GET /api/google/tasks: Raw/formatted tasks (protected by API key if configured)
+router.get('/tasks', requireApiKey, async (req, res) => {
     try {
         const limit = parseInt(req.query.limit, 10) || 15;
         const tasks = await googleService.getTasks(limit);
@@ -101,15 +117,22 @@ router.get('/tasks', async (req, res) => {
     }
 });
 
-// GET /api/google/reminders: Compact unified endpoint for COSMO ESP32
-router.get('/reminders', async (req, res) => {
+// GET /api/google/reminders: Compact unified endpoint for COSMO ESP32 (protected by API key if configured)
+router.get('/reminders', requireApiKey, async (req, res) => {
     try {
         const reminders = await googleService.getCombinedReminders();
         res.json(reminders);
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        res.status(500).json({
+            status: 'error',
+            message: err.message,
+            updatedAt: new Date().toISOString(),
+            eventsCount: 0,
+            tasksCount: 0,
+            events: [],
+            tasks: []
+        });
     }
 });
 
 module.exports = router;
-

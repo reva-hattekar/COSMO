@@ -1,9 +1,13 @@
 const express = require('express');
 const DatabaseQueries = require('../db/queries');
 const { getDatabase } = require('../db/connection');
+const { requireApiKey } = require('../middleware/auth');
 
 const router = express.Router();
 const queries = new DatabaseQueries(getDatabase());
+
+// Require API key for private database endpoints when COSMO_API_KEY is configured
+router.use(requireApiKey);
 
 /**
  * GET /api/database/stats

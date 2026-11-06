@@ -11,6 +11,8 @@ yarn-error.log*
 !/.env.example
 secrets.h
 **/secrets.h
+data/google_tokens.json
+data/*.json
 
 # SQLite databases
 data/*.db

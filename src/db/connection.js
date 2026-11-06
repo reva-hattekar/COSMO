@@ -4,16 +4,30 @@ const fs = require('fs');
 
 class DatabaseConnection {
     constructor(dbPath) {
-        this.dbPath = dbPath || process.env.DB_PATH || path.join(__dirname, '../../data/cosmo.db');
-        
-        // Ensure data directory exists if using file path
-        if (this.dbPath !== ':memory:') {
-            const dir = path.dirname(this.dbPath);
+        let targetPath = dbPath || process.env.DATABASE_PATH || process.env.DB_PATH;
+        if (!targetPath || typeof targetPath !== 'string' || targetPath.trim().length === 0) {
+            targetPath = path.join(__dirname, '../../data/cosmo.db');
+        } else {
+            targetPath = targetPath.trim();
+        }
+
+        // If configured path is a directory (e.g. Railway volume mounted at /data), append default db filename
+        if (targetPath !== ':memory:') {
+            try {
+                if (fs.existsSync(targetPath) && fs.statSync(targetPath).isDirectory()) {
+                    targetPath = path.join(targetPath, 'cosmo.db');
+                }
+            } catch (e) {
+                // Ignore stat errors if path does not exist yet
+            }
+
+            const dir = path.dirname(targetPath);
             if (!fs.existsSync(dir)) {
                 fs.mkdirSync(dir, { recursive: true });
             }
         }
 
+        this.dbPath = targetPath;
         this.db = null;
         this._isReady = false;
     }
@@ -23,6 +37,13 @@ class DatabaseConnection {
      */
     async open() {
         if (this.db) return this;
+
+        if (this.dbPath !== ':memory:') {
+            const dir = path.dirname(this.dbPath);
+            if (!fs.existsSync(dir)) {
+                fs.mkdirSync(dir, { recursive: true });
+            }
+        }
 
         return new Promise((resolve, reject) => {
             this.db = new sqlite3.Database(this.dbPath, (err) => {
@@ -142,8 +163,13 @@ function getDatabase(dbPath) {
     return defaultInstance;
 }
 
+function resetDefaultInstance() {
+    defaultInstance = null;
+}
+
 module.exports = {
     DatabaseConnection,
-    getDatabase
+    getDatabase,
+    resetDefaultInstance
 };
 

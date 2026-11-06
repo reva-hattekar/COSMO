@@ -22,12 +22,14 @@ This guide explains how to deploy the COSMO Node.js backend to [Railway](https:/
    ```env
    NODE_ENV=production
    PORT=3000
-   DATABASE_PATH=/app/data/cosmo_knowledge.db
+   DATABASE_PATH=/app/data/cosmo.db
+   COSMO_API_KEY=your_secure_random_api_key_here
    GOOGLE_CLIENT_ID=your_google_client_id.apps.googleusercontent.com
    GOOGLE_CLIENT_SECRET=your_google_client_secret
    GOOGLE_REDIRECT_URI=https://<your-railway-domain>.up.railway.app/api/google/callback
    ```
    *(Note: Set `GOOGLE_REDIRECT_URI` after Railway assigns your public domain in step 3).*
+   *(Note: `COSMO_API_KEY` is optional. When set, requests to `/api/google/reminders`, `/api/google/calendar`, `/api/google/tasks`, and `/api/database/*` require `Authorization: Bearer <COSMO_API_KEY>`. Browser OAuth flows `/api/google/auth` and `/api/google/callback` remain accessible).*
 
 3. **Generate Public Domain**:
    - In Railway project settings, navigate to **Networking**.

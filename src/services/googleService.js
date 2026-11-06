@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 
 const TOKENS_FILE = path.join(__dirname, '../../data/google_tokens.json');
 
@@ -13,6 +14,43 @@ class GoogleService {
         this.clientId = process.env.GOOGLE_CLIENT_ID || '';
         this.clientSecret = process.env.GOOGLE_CLIENT_SECRET || '';
         this.redirectUri = process.env.GOOGLE_REDIRECT_URI || 'http://localhost:3000/api/google/callback';
+        this.oauthStates = new Map(); // state -> expiresAt (timestamp)
+    }
+
+    /**
+     * Generate a cryptographically secure OAuth state parameter with a 10-minute TTL.
+     */
+    generateOAuthState() {
+        this._cleanExpiredStates();
+        const state = crypto.randomBytes(24).toString('hex');
+        this.oauthStates.set(state, Date.now() + (10 * 60 * 1000));
+        return state;
+    }
+
+    /**
+     * Validate and consume an OAuth state parameter (one-time use to protect against CSRF and replay attacks).
+     */
+    validateOAuthState(state) {
+        if (!state || typeof state !== 'string' || state.trim().length === 0) {
+            return false;
+        }
+        this._cleanExpiredStates();
+        const expiresAt = this.oauthStates.get(state.trim());
+        if (!expiresAt) {
+            return false;
+        }
+        // One-time use: consume immediately
+        this.oauthStates.delete(state.trim());
+        return Date.now() <= expiresAt;
+    }
+
+    _cleanExpiredStates() {
+        const now = Date.now();
+        for (const [state, expiresAt] of this.oauthStates.entries()) {
+            if (now > expiresAt) {
+                this.oauthStates.delete(state);
+            }
+        }
     }
 
     getTokens() {
@@ -27,8 +65,24 @@ class GoogleService {
         return null;
     }
 
+    /**
+     * Save tokens to file.
+     * CRITICAL: Preserves existing refresh_token if new payload does not provide one.
+     * Never overwrites a valid refresh token with undefined, null, or empty string.
+     */
     saveTokens(tokens) {
         try {
+            if (!tokens || typeof tokens !== 'object') {
+                return false;
+            }
+
+            const existing = this.getTokens();
+            if (existing && existing.refresh_token && typeof existing.refresh_token === 'string' && existing.refresh_token.trim().length > 0) {
+                if (!tokens.refresh_token || typeof tokens.refresh_token !== 'string' || tokens.refresh_token.trim().length === 0) {
+                    tokens.refresh_token = existing.refresh_token.trim();
+                }
+            }
+
             const dir = path.dirname(TOKENS_FILE);
             if (!fs.existsSync(dir)) {
                 fs.mkdirSync(dir, { recursive: true });
@@ -42,7 +96,7 @@ class GoogleService {
         }
     }
 
-    getAuthUrl() {
+    getAuthUrl(state) {
         const rootUrl = 'https://accounts.google.com/o/oauth2/v2/auth';
         const options = {
             redirect_uri: this.redirectUri,
@@ -52,6 +106,9 @@ class GoogleService {
             prompt: 'consent',
             scope: SCOPES.join(' ')
         };
+        if (state) {
+            options.state = state;
+        }
         const qs = new URLSearchParams(options);
         return `${rootUrl}?${qs.toString()}`;
     }
@@ -69,7 +126,8 @@ class GoogleService {
         const res = await fetch(tokenUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-            body: body.toString()
+            body: body.toString(),
+            signal: AbortSignal.timeout(10000)
         });
 
         const data = await res.json();
@@ -77,9 +135,15 @@ class GoogleService {
             throw new Error(data.error_description || data.error || 'Failed to exchange authorization code');
         }
 
+        const existingTokens = this.getTokens();
+        // Preserve existing refresh token if new response omits it
+        let refreshToken = (data.refresh_token && typeof data.refresh_token === 'string' && data.refresh_token.trim().length > 0)
+            ? data.refresh_token.trim()
+            : (existingTokens && existingTokens.refresh_token && existingTokens.refresh_token.trim().length > 0 ? existingTokens.refresh_token.trim() : null);
+
         const tokens = {
             access_token: data.access_token,
-            refresh_token: data.refresh_token,
+            refresh_token: refreshToken,
             expires_at: Date.now() + ((data.expires_in || 3600) * 1000),
             updated_at: new Date().toISOString()
         };
@@ -90,7 +154,7 @@ class GoogleService {
 
     async getValidAccessToken() {
         let tokens = this.getTokens();
-        if (!tokens || !tokens.refresh_token) {
+        if (!tokens || !tokens.refresh_token || !tokens.refresh_token.trim()) {
             return null;
         }
 
@@ -112,7 +176,8 @@ class GoogleService {
         const res = await fetch(tokenUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-            body: body.toString()
+            body: body.toString(),
+            signal: AbortSignal.timeout(10000)
         });
 
         const data = await res.json();
@@ -122,6 +187,9 @@ class GoogleService {
         }
 
         tokens.access_token = data.access_token;
+        if (data.refresh_token && typeof data.refresh_token === 'string' && data.refresh_token.trim().length > 0) {
+            tokens.refresh_token = data.refresh_token.trim();
+        }
         tokens.expires_at = Date.now() + ((data.expires_in || 3600) * 1000);
         tokens.updated_at = new Date().toISOString();
         this.saveTokens(tokens);
@@ -131,7 +199,7 @@ class GoogleService {
 
     async getStatus() {
         const tokens = this.getTokens();
-        if (!tokens || !tokens.refresh_token) {
+        if (!tokens || !tokens.refresh_token || !tokens.refresh_token.trim()) {
             return {
                 configured: Boolean(this.clientId && this.clientSecret),
                 authenticated: false,
@@ -157,7 +225,8 @@ class GoogleService {
         const url = `https://www.googleapis.com/calendar/v3/calendars/primary/events?singleEvents=true&orderBy=startTime&timeMin=${encodeURIComponent(now)}&maxResults=${limit}`;
 
         const res = await fetch(url, {
-            headers: { 'Authorization': `Bearer ${token}` }
+            headers: { 'Authorization': `Bearer ${token}` },
+            signal: AbortSignal.timeout(8000)
         });
 
         const data = await res.json();
@@ -198,7 +267,8 @@ class GoogleService {
         // Fetch task lists first
         const listsUrl = 'https://tasks.googleapis.com/tasks/v1/users/@me/lists?maxResults=5';
         const listsRes = await fetch(listsUrl, {
-            headers: { 'Authorization': `Bearer ${token}` }
+            headers: { 'Authorization': `Bearer ${token}` },
+            signal: AbortSignal.timeout(8000)
         });
         const listsData = await listsRes.json();
         if (!listsRes.ok) {
@@ -215,7 +285,8 @@ class GoogleService {
         for (const list of taskLists.slice(0, 2)) {
             const tasksUrl = `https://tasks.googleapis.com/tasks/v1/lists/${encodeURIComponent(list.id)}/tasks?showCompleted=false&maxResults=${limit}`;
             const tRes = await fetch(tasksUrl, {
-                headers: { 'Authorization': `Bearer ${token}` }
+                headers: { 'Authorization': `Bearer ${token}` },
+                signal: AbortSignal.timeout(8000)
             });
             const tData = await tRes.json();
             if (tRes.ok && tData.items) {
@@ -246,6 +317,16 @@ class GoogleService {
         return allTasks.slice(0, limit);
     }
 
+    /**
+     * Get combined reminders from Calendar & Tasks with explicit status handling.
+     * Distinguishes:
+     * - 'ok': Complete success (both succeeded)
+     * - 'partial': Partial success (one succeeded, one failed)
+     * - 'unauthenticated': Authentication missing or expired
+     * - 'error': API failure (both failed or unexpected error)
+     *
+     * Preserves: events, tasks, updatedAt, eventsCount, tasksCount for firmware compatibility.
+     */
     async getCombinedReminders() {
         const status = await this.getStatus();
         if (!status.authenticated) {
@@ -254,42 +335,102 @@ class GoogleService {
                 message: 'Google account not linked',
                 authUrl: '/api/google/auth',
                 updatedAt: new Date().toISOString(),
+                eventsCount: 0,
+                tasksCount: 0,
                 events: [],
                 tasks: []
             };
         }
 
-        try {
-            const [events, tasks] = await Promise.all([
-                this.getCalendarEvents(8).catch(e => {
-                    console.error('[GoogleService] Events fetch error:', e.message);
-                    return [];
-                }),
-                this.getTasks(10).catch(e => {
-                    console.error('[GoogleService] Tasks fetch error:', e.message);
-                    return [];
-                })
-            ]);
+        let events = [];
+        let tasks = [];
+        let eventsError = null;
+        let tasksError = null;
 
+        const [eventsResult, tasksResult] = await Promise.allSettled([
+            this.getCalendarEvents(8),
+            this.getTasks(10)
+        ]);
+
+        if (eventsResult.status === 'fulfilled') {
+            events = eventsResult.value;
+        } else {
+            eventsError = eventsResult.reason?.message || 'Calendar events fetch failed';
+            console.error('[GoogleService] Events fetch error:', eventsError);
+        }
+
+        if (tasksResult.status === 'fulfilled') {
+            tasks = tasksResult.value;
+        } else {
+            tasksError = tasksResult.reason?.message || 'Tasks fetch failed';
+            console.error('[GoogleService] Tasks fetch error:', tasksError);
+        }
+
+        const isAuthError = (err) => err && (
+            err.includes('Not authenticated') ||
+            err.includes('invalid_grant') ||
+            err.includes('Invalid Credentials') ||
+            err.includes('Token refresh failed')
+        );
+
+        // Authentication failure during request
+        if (eventsError && tasksError && (isAuthError(eventsError) || isAuthError(tasksError))) {
             return {
-                status: 'ok',
+                status: 'unauthenticated',
+                message: 'Google authentication expired or invalid. Please re-authenticate.',
+                authUrl: '/api/google/auth',
+                updatedAt: new Date().toISOString(),
+                eventsCount: 0,
+                tasksCount: 0,
+                events: [],
+                tasks: [],
+                errors: { calendar: eventsError, tasks: tasksError }
+            };
+        }
+
+        // Both services failed due to API error
+        if (eventsError && tasksError) {
+            return {
+                status: 'error',
+                message: `Failed to fetch reminders: Calendar (${eventsError}), Tasks (${tasksError})`,
+                updatedAt: new Date().toISOString(),
+                eventsCount: 0,
+                tasksCount: 0,
+                events: [],
+                tasks: [],
+                errors: { calendar: eventsError, tasks: tasksError }
+            };
+        }
+
+        // Partial success: one service failed, one succeeded
+        if (eventsError || tasksError) {
+            const failedName = eventsError ? 'Calendar' : 'Tasks';
+            const failReason = eventsError || tasksError;
+            return {
+                status: 'partial',
+                message: `Partial reminders sync: ${failedName} failed (${failReason})`,
                 updatedAt: new Date().toISOString(),
                 eventsCount: events.length,
                 tasksCount: tasks.length,
                 events,
-                tasks
-            };
-        } catch (err) {
-            return {
-                status: 'error',
-                message: err.message,
-                updatedAt: new Date().toISOString(),
-                events: [],
-                tasks: []
+                tasks,
+                errors: {
+                    calendar: eventsError || null,
+                    tasks: tasksError || null
+                }
             };
         }
+
+        // Complete success
+        return {
+            status: 'ok',
+            updatedAt: new Date().toISOString(),
+            eventsCount: events.length,
+            tasksCount: tasks.length,
+            events,
+            tasks
+        };
     }
 }
 
 module.exports = new GoogleService();
-
