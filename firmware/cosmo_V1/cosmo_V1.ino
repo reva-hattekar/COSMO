@@ -61,6 +61,7 @@ bool wallpaperAttempted = false;
 uint32_t tjpgCallbackCount = 0;
 
 static const char* GITHUB_ROOT_CA =
+// ISRG Root X1 (Let's Encrypt Root)
 "-----BEGIN CERTIFICATE-----\n"
 "MIIFazCCA1OgAwIBAgIRAIIQz7DSQONZRGPgu2OCiwAwDQYJKoZIhvcNAQELBQAw\n"
 "TzELMAkGA1UEBhMCVVMxKTAnBgNVBAoTIEludGVybmV0IFNlY3VyaXR5IFJlc2Vh\n"
@@ -91,6 +92,41 @@ static const char* GITHUB_ROOT_CA =
 "4RgqsahDYVvTH9w7jXbyLeiNdd8XM2w9U/t7y0Ff/9yi0GE44Za4rF2LN9d11TPA\n"
 "mRGunUHBcnWEvgJBQl9nJEiU0Zsnvgc/ubhPgXRR4Xq37Z0j4r7g1SgEEzwxA57d\n"
 "emyPxgcYxn/eR44/KJ4EBs+lVDR3veyJm+kXQ99b21/+jh5Xos1AnX5iItreGCc=\n"
+"-----END CERTIFICATE-----\n"
+// Root YR (Let's Encrypt 2026 Active CA cross-signed by ISRG Root X1)
+"-----BEGIN CERTIFICATE-----\n"
+"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\n"
 "-----END CERTIFICATE-----\n";
 
 bool tjpgOutput(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t* bitmap) {
@@ -388,6 +424,7 @@ bool checkAndUpdateWallpaper(const char* url, const char* path) {
   } else {
     client.setInsecure();
   }
+  client.setTimeout(10);
 
   HTTPClient http;
   http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
@@ -395,9 +432,11 @@ bool checkAndUpdateWallpaper(const char* url, const char* path) {
   http.setConnectTimeout(6000);
   http.setUserAgent("COSMO-ESP32");
   http.addHeader("Accept", "image/jpeg, */*");
+  http.setReuse(false);
 
   if (!http.begin(client, url)) {
     Serial.println("[WALLPAPER] ERROR: HTTPClient.begin failed during update check.");
+    client.stop();
     return false;
   }
 
@@ -405,6 +444,7 @@ bool checkAndUpdateWallpaper(const char* url, const char* path) {
   if (httpCode != HTTP_CODE_OK) {
     Serial.printf("[WALLPAPER] Update check: server returned HTTP %d (%s).\n", httpCode, http.errorToString(httpCode).c_str());
     http.end();
+    client.stop();
     return false;
   }
 
@@ -436,6 +476,7 @@ bool checkAndUpdateWallpaper(const char* url, const char* path) {
   if (currentSize > 1000 && remoteSize > 0 && (size_t)remoteSize == currentSize && (etag.length() == 0 || etag == cachedEtag)) {
     Serial.printf("[WALLPAPER] Cache is up to date (%u bytes). No download needed.\n", (unsigned int)currentSize);
     http.end();
+    client.stop();
     return false;
   }
 
@@ -449,6 +490,7 @@ bool checkAndUpdateWallpaper(const char* url, const char* path) {
   if (!file) {
     Serial.println("[WALLPAPER] ERROR: Failed to create staging file /wallpaper.tmp in LittleFS!");
     http.end();
+    client.stop();
     return false;
   }
 
@@ -456,6 +498,7 @@ bool checkAndUpdateWallpaper(const char* url, const char* path) {
   file.flush();
   file.close();
   http.end();
+  client.stop();
 
   Serial.printf("[WALLPAPER] Actual downloaded byte count: %d bytes\n", bytesWritten);
 
@@ -758,6 +801,135 @@ bool tjpgIconOutput(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t* bitm
   return 1;
 }
 
+// ======================================
+// NETWORK DIAGNOSTICS & PROBE
+// ======================================
+
+bool runNetworkDiagnostics(const char* host, IPAddress& outIP) {
+  Serial.println("[NET-DIAG] ========================================");
+  Serial.println("[NET-DIAG] NETWORK & HTTPS DIAGNOSTIC PROBE");
+  Serial.println("[NET-DIAG] ========================================");
+
+  // 1. Wi-Fi Status
+  wl_status_t wfStatus = WiFi.status();
+  Serial.printf("[NET-DIAG] 1. Wi-Fi Status: %d (%s)\n",
+                wfStatus, (wfStatus == WL_CONNECTED ? "WL_CONNECTED" : "DISCONNECTED"));
+  if (wfStatus != WL_CONNECTED) {
+    Serial.println("[NET-DIAG] CRITICAL ERROR: Wi-Fi is disconnected! Aborting HTTPS probe.");
+    Serial.println("[NET-DIAG] ========================================");
+    return false;
+  }
+
+  Serial.printf("[NET-DIAG]    - Local IP:    %s\n", WiFi.localIP().toString().c_str());
+  Serial.printf("[NET-DIAG]    - Gateway IP:  %s\n", WiFi.gatewayIP().toString().c_str());
+  Serial.printf("[NET-DIAG]    - Subnet Mask: %s\n", WiFi.subnetMask().toString().c_str());
+  Serial.printf("[NET-DIAG]    - DNS Server:  %s\n", WiFi.dnsIP().toString().c_str());
+  Serial.printf("[NET-DIAG]    - RSSI:        %d dBm\n", WiFi.RSSI());
+  Serial.printf("[NET-DIAG]    - Free Heap:   %u bytes (Max contiguous block: %u bytes)\n",
+                ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+
+  // 2. System Time & NTP Check
+  time_t now = time(nullptr);
+  struct tm timeinfo;
+  bool timeValid = getLocalTime(&timeinfo, 100);
+  char timeBuf[32] = {0};
+  if (timeValid) {
+    strftime(timeBuf, sizeof(timeBuf), "%Y-%m-%d %H:%M:%S", &timeinfo);
+  } else {
+    snprintf(timeBuf, sizeof(timeBuf), "UNSYNCHRONIZED (epoch=%ld)", (long)now);
+  }
+  Serial.printf("[NET-DIAG] 2. System Clock: %s (NTP epoch: %ld, valid: %s)\n",
+                timeBuf, (long)now, (now >= 1700000000 ? "YES" : "NO"));
+
+  // 3. DNS Resolution
+  Serial.printf("[NET-DIAG] 3. Probing DNS resolution for '%s'...\n", host);
+  unsigned long dnsStart = millis();
+  int dnsResult = WiFi.hostByName(host, outIP);
+  unsigned long dnsDuration = millis() - dnsStart;
+
+  if (dnsResult == 1 && outIP != INADDR_NONE) {
+    Serial.printf("[NET-DIAG]    - DNS SUCCESS: %s -> %s (took %lu ms)\n",
+                  host, outIP.toString().c_str(), dnsDuration);
+  } else {
+    Serial.printf("[NET-DIAG]    - DNS FAILED (code=%d, took %lu ms). Attempting fallback to Google DNS (8.8.8.8)...\n",
+                  dnsResult, dnsDuration);
+    WiFi.config(INADDR_NONE, INADDR_NONE, INADDR_NONE, IPAddress(8, 8, 8, 8), IPAddress(1, 1, 1, 1));
+    dnsResult = WiFi.hostByName(host, outIP);
+    if (dnsResult == 1 && outIP != INADDR_NONE) {
+      Serial.printf("[NET-DIAG]    - Fallback DNS SUCCESS: %s -> %s\n", host, outIP.toString().c_str());
+    } else {
+      Serial.println("[NET-DIAG] CRITICAL ERROR: DNS resolution completely failed! Cannot route to host.");
+      Serial.println("[NET-DIAG] ========================================");
+      return false;
+    }
+  }
+
+  // 4. Raw TCP Socket Probe to Port 443
+  Serial.printf("[NET-DIAG] 4. Probing raw TCP handshake to %s:443...\n", outIP.toString().c_str());
+  WiFiClient tcpProbe;
+  tcpProbe.setTimeout(4);
+  unsigned long tcpStart = millis();
+  bool tcpOk = tcpProbe.connect(outIP, 443);
+  unsigned long tcpDuration = millis() - tcpStart;
+
+  if (tcpOk) {
+    Serial.printf("[NET-DIAG]    - Raw TCP SUCCESS: Connected to port 443 in %lu ms.\n", tcpDuration);
+    tcpProbe.stop();
+  } else {
+    Serial.printf("[NET-DIAG]    - Raw TCP FAILED: Cannot connect to %s:443 (took %lu ms).\n",
+                  outIP.toString().c_str(), tcpDuration);
+    Serial.println("[NET-DIAG] CRITICAL ERROR: TCP port 443 connection failed or timed out! Router/ISP blocking HTTPS port.");
+    Serial.println("[NET-DIAG] ========================================");
+    return false;
+  }
+
+  // 5. TLS Handshake Probe (WiFiClientSecure)
+  Serial.println("[NET-DIAG] 5. Probing TLS handshake with GitHub Root CA...");
+  WiFiClientSecure secProbe;
+  secProbe.setTimeout(8);
+  if (now >= 1700000000) {
+    secProbe.setCACert(GITHUB_ROOT_CA);
+  } else {
+    secProbe.setInsecure();
+  }
+
+  unsigned long tlsStart = millis();
+  bool tlsOk = secProbe.connect(host, 443);
+  unsigned long tlsDuration = millis() - tlsStart;
+
+  if (tlsOk) {
+    Serial.printf("[NET-DIAG]    - TLS Handshake SUCCESS with Root CA in %lu ms.\n", tlsDuration);
+    secProbe.stop();
+  } else {
+    char lastErr[128] = {0};
+    secProbe.lastError(lastErr, sizeof(lastErr));
+    Serial.printf("[NET-DIAG]    - TLS Handshake FAILED with Root CA in %lu ms. Error: %s\n", tlsDuration, lastErr);
+
+    // Isolate whether failure was due to CA certificate verification
+    Serial.println("[NET-DIAG]    - Testing TLS with setInsecure() to isolate certificate vs network/RAM issue...");
+    WiFiClientSecure insecProbe;
+    insecProbe.setTimeout(8);
+    insecProbe.setInsecure();
+    unsigned long insecStart = millis();
+    bool insecOk = insecProbe.connect(host, 443);
+    unsigned long insecDuration = millis() - insecStart;
+
+    if (insecOk) {
+      Serial.printf("[NET-DIAG]    - TLS with setInsecure() SUCCEEDED in %lu ms!\n", insecDuration);
+      Serial.println("[NET-DIAG] DIAGNOSIS: TLS failure is specifically caused by CA Certificate validation (chain depth or date mismatch).");
+      insecProbe.stop();
+    } else {
+      char insecErr[128] = {0};
+      insecProbe.lastError(insecErr, sizeof(insecErr));
+      Serial.printf("[NET-DIAG]    - TLS with setInsecure() ALSO FAILED in %lu ms. Error: %s\n", insecDuration, insecErr);
+      Serial.println("[NET-DIAG] DIAGNOSIS: TLS failure is caused by socket/memory/ciphersuite rejection, not CA certificate validation.");
+    }
+  }
+
+  Serial.println("[NET-DIAG] ========================================");
+  return true;
+}
+
 bool downloadIcon(int index) {
   if (WiFi.status() != WL_CONNECTED) {
     Serial.printf("[ICON-DOWNLOAD] App [%d]: Skipped (Wi-Fi not connected)\n", index);
@@ -772,6 +944,7 @@ bool downloadIcon(int index) {
   Serial.println("[ICON-DOWNLOAD] ----------------------------------------");
   Serial.printf("[ICON-DOWNLOAD] App [%d]: %s\n", index, appNames[index]);
   Serial.printf("[ICON-DOWNLOAD] URL: %s\n", url);
+  Serial.printf("[ICON-DOWNLOAD] Free Heap before request: %u bytes\n", ESP.getFreeHeap());
 
   WiFiClientSecure client;
   time_t now = time(nullptr);
@@ -780,13 +953,15 @@ bool downloadIcon(int index) {
   } else {
     client.setInsecure();
   }
+  client.setTimeout(10);
 
   HTTPClient http;
   http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
   http.setTimeout(10000);
-  http.setConnectTimeout(6000);
+  http.setConnectTimeout(8000);
   http.setUserAgent("COSMO-ESP32");
   http.addHeader("Accept", "image/jpeg, */*");
+  http.setReuse(false);
 
   if (!http.begin(client, url)) {
     Serial.printf("[ICON-DOWNLOAD] ERROR: HTTPClient.begin failed for %s\n", url);
@@ -796,8 +971,15 @@ bool downloadIcon(int index) {
   int httpCode = http.GET();
   Serial.printf("[ICON-DOWNLOAD] HTTP Status: %d (%s)\n", httpCode, http.errorToString(httpCode).c_str());
 
+  if (httpCode < 0) {
+    char sslErr[128] = {0};
+    client.lastError(sslErr, sizeof(sslErr));
+    Serial.printf("[ICON-DOWNLOAD] Connection failure detail: %s\n", (sslErr[0] ? sslErr : "No mbedTLS error reported"));
+  }
+
   if (httpCode != HTTP_CODE_OK) {
     http.end();
+    client.stop();
     return false;
   }
 
@@ -810,6 +992,7 @@ bool downloadIcon(int index) {
   if (!f) {
     Serial.printf("[ICON-DOWNLOAD] ERROR: Could not open %s for writing\n", tempPath);
     http.end();
+    client.stop();
     return false;
   }
 
@@ -817,6 +1000,7 @@ bool downloadIcon(int index) {
   f.flush();
   f.close();
   http.end();
+  client.stop();
 
   Serial.printf("[ICON-DOWNLOAD] Downloaded bytes: %d\n", written);
 
@@ -875,8 +1059,51 @@ bool downloadIcon(int index) {
 bool syncAppIcons() {
   if (WiFi.status() != WL_CONNECTED) return false;
 
-  bool anyDownloaded = false;
-  for (int i = 0; i < APP_COUNT; i++) {
+  // 1. Run full network diagnostics probe
+  IPAddress resolvedIP;
+  if (!runNetworkDiagnostics("raw.githubusercontent.com", resolvedIP)) {
+    Serial.println("[ICON-SYNC] Network diagnostics failed! Postponing icon downloads.");
+    return false;
+  }
+
+  // 2. Test one connection first: icon_8ball.jpg (App 0)
+  Serial.println("[ICON-SYNC] STEP 1: Probing single test connection on icon_8ball.jpg (App 0)...");
+  bool testSuccess = false;
+
+  bool icon0AlreadyValid = false;
+  if (LittleFS.exists(iconCachePaths[0])) {
+    File f = LittleFS.open(iconCachePaths[0], FILE_READ);
+    if (f && f.size() >= 500) {
+      uint8_t hdr[2] = {0, 0};
+      f.read(hdr, 2);
+      f.close();
+      if (hdr[0] == 0xFF && hdr[1] == 0xD8) {
+        icon0AlreadyValid = true;
+      }
+    } else if (f) {
+      f.close();
+    }
+  }
+
+  if (icon0AlreadyValid) {
+    Serial.println("[ICON-SYNC] icon_8ball.jpg is already cached and valid in LittleFS.");
+    testSuccess = true;
+  } else {
+    testSuccess = downloadIcon(0);
+    if (!testSuccess) {
+      Serial.println("[ICON-SYNC] SINGLE TEST CONNECTION FAILED on icon_8ball.jpg!");
+      Serial.println("[ICON-SYNC] Halting download sequence to prevent resource exhaustion. Will retry later.");
+      return false;
+    }
+    Serial.println("[ICON-SYNC] SINGLE TEST CONNECTION SUCCEEDED on icon_8ball.jpg!");
+  }
+
+  // 3. Close connection cleanly, wait briefly, then proceed with remaining five icons sequentially
+  Serial.println("[ICON-SYNC] STEP 2: Proceeding with remaining icons (1 to 5) sequentially...");
+  delay(200);
+
+  bool anyDownloaded = !icon0AlreadyValid && testSuccess;
+  for (int i = 1; i < APP_COUNT; i++) {
     bool needDownload = true;
     if (LittleFS.exists(iconCachePaths[i])) {
       File f = LittleFS.open(iconCachePaths[i], FILE_READ);
@@ -895,18 +1122,19 @@ bool syncAppIcons() {
     if (needDownload) {
       if (downloadIcon(i)) {
         anyDownloaded = true;
+      } else {
+        Serial.printf("[ICON-SYNC] Warning: App [%d] download failed. Continuing with next icon.\n", i);
       }
-      delay(100);
+      delay(150); // Clean wait between connections
     }
   }
 
-  if (anyDownloaded) {
-    Serial.println("[ICON] New icon(s) successfully cached. Triggering carousel redraw...");
-    if (screen == LAUNCHER) {
-      renderCarousel(1.0f);
-      presentCarousel();
-    }
+  if (anyDownloaded && screen == LAUNCHER) {
+    Serial.println("[ICON-SYNC] Redrawing carousel with newly cached icons...");
+    renderCarousel(1.0f);
+    presentCarousel();
   }
+
   return anyDownloaded;
 }
 
@@ -1638,7 +1866,7 @@ void setup() {
   if (WiFi.status() == WL_CONNECTED) {
     Serial.println("[NTP] Waiting for clock synchronization...");
     unsigned long ntpStart = millis();
-    while (time(nullptr) < 1700000000 && millis() - ntpStart < 2500) {
+    while (time(nullptr) < 1700000000 && millis() - ntpStart < 4000) {
       delay(100);
     }
     if (time(nullptr) >= 1700000000) {
@@ -1649,6 +1877,7 @@ void setup() {
 
     // Check remote wallpaper for any cloud updates
     checkAndUpdateWallpaper(COSMO_WALLPAPER_URL, WALLPAPER_CACHE_PATH);
+    delay(150);
     syncAppIcons();
   }
 
