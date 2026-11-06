@@ -10,7 +10,7 @@
 class WikidataClient {
     constructor(options = {}) {
         this.endpoint = options.endpoint || 'https://query.wikidata.org/sparql';
-        this.userAgent = options.userAgent || 'COSMO-Akinator-Engine/1.0 (https://github.com/reva0/COSMO; contact: cosmo-project@local) Node-Fetch/20';
+        this.userAgent = options.userAgent || 'COSMO-Engine/1.0 (https://github.com/reva0/COSMO; contact: cosmo-project@local) Node-Fetch/20';
         this.minRequestIntervalMs = options.minRequestIntervalMs || 1200; // 1.2s delay between requests
         this.maxRetries = options.maxRetries !== undefined ? options.maxRetries : 4;
         this.timeoutMs = options.timeoutMs || 45000;

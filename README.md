@@ -1,6 +1,6 @@
 # COSMO — ESP32 Smart Interactive Companion & Knowledge Engine
 
-**COSMO** is a handheld ESP32-based interactive companion device featuring a 240×240 circular GC9A01 TFT display, a 3-button physical navigation interface, independent games, an online cloud wallpaper engine, Google Reminders (Calendar & Tasks), and an Akinator-style knowledge engine backend.
+**COSMO** is a handheld ESP32-based interactive companion device featuring a 240×240 circular GC9A01 TFT display, a 3-button physical navigation interface, independent games, an online cloud wallpaper engine, Google Reminders (Calendar & Tasks), and an independent knowledge engine backend.
 
 ---
 
@@ -9,10 +9,10 @@
 - **Circular UI Launcher**: Smooth cubic-eased carousel with dynamic RGB565 brightness and 3D depth transitions.
 - **Online Galaxy Wallpaper**: Automatic HTTPS download and LittleFS caching of 240×240 galaxy wallpaper with high-contrast live clock overlay.
 - **Built-in Games**:
+  - **Chess**: Complete chess engine with Player vs COSMO (AI) and 2-Player local modes, castling, en passant, promotion, and check/checkmate detection.
   - **Simon Says**: 4-quadrant interactive sequence memory game with dual-button chord red detection and Game Over exit handler.
   - **Snake**: Classic snake with food spawning and score tracking.
   - **Tetris**: Retro tetromino block-stacking game.
-- **Standalone Akinator Client**: Native ESP32 client interfacing with COSMO's Node.js Akinator backend over Wi-Fi.
 - **Google Reminders Dashboard**: Read-only display of Google Calendar events and Google Tasks.
 - **Magic 8 Ball**: Fun fortunes with celestial thinking animations.
 
@@ -30,7 +30,8 @@ COSMO/
 ├── firmware/
 │   └── cosmo_V1/
 │       ├── cosmo_V1.ino        # Main ESP32 sketch & lifecycle management
-│       ├── AkinatorApp.h/.cpp  # Akinator client engine
+│       ├── ChessApp.h/.cpp     # Chess circular UI & navigation
+│       ├── ChessEngine.h/.cpp  # Chess game rules, move generation & AI
 │       ├── SimonGame.h/.cpp    # Simon Says game engine
 │       ├── SnakeGame.h/.cpp    # Snake game engine
 │       ├── TetrisGame.h/.cpp   # Tetris game engine
@@ -38,7 +39,7 @@ COSMO/
 ├── src/
 │   ├── db/                     # SQLite knowledge database & schema
 │   ├── ingestion/              # Wikidata SPARQL ingestion pipeline
-│   ├── routes/                 # Express REST API routes (Akinator, Google, DB)
+│   ├── routes/                 # Express REST API routes (Google, DB)
 │   ├── services/               # Google OAuth & Reminders services
 │   └── server.js               # Main backend server entry point
 ├── tests/                      # Automated test suites

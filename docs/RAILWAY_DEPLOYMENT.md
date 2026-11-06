@@ -46,8 +46,8 @@ This guide explains how to deploy the COSMO Node.js backend to [Railway](https:/
 
 ## 3. Endpoints Available on Railway
 - `GET /health` – Service health & database connectivity
-- `POST /api/game/start` – Start Akinator session
-- `POST /api/game/:id/answer` – Submit Akinator answer
+- `GET /api/database/stats` – Knowledge base entity count & category metrics
+- `GET /api/database/search?q=:name` – Entity search
 - `GET /api/google/auth` – Initiate Google OAuth flow
 - `GET /api/google/callback` – Google OAuth redirect callback
 - `GET /api/google/status` – Google authentication status

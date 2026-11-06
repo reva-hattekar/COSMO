@@ -102,16 +102,12 @@ bool tjpgOutput(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t* bitmap) 
 #include "SnakeGame.h"
 #include "TetrisGame.h"
 #include "SimonGame.h"
-#include "AkinatorApp.h"
-
-#ifndef AKINATOR_SERVER_URL
-const char* AKINATOR_SERVER_URL = "http://192.168.1.100:3000";
-#endif
+#include "ChessApp.h"
 
 SnakeGame snake(tft);
 TetrisGame tetris(tft);
 SimonGame simon(tft);
-AkinatorApp akinator(tft);
+ChessApp chess(tft);
 
 // ======================================
 // BUTTONS
@@ -150,7 +146,7 @@ bool selectPressed = false;
 
 const char* appNames[] = {
   "MAGIC 8 BALL",
-  "AKINATOR",
+  "CHESS",
   "SNAKE",
   "TETRIS",
   "SIMON SAYS",
@@ -331,49 +327,74 @@ void centerText(
 // WALLPAPER & CLOCK
 // ======================================
 
-bool downloadWallpaper(const char* url, const char* path) {
+bool checkAndUpdateWallpaper(const char* url, const char* path) {
   if (WiFi.status() != WL_CONNECTED) {
-    Serial.printf("[WALLPAPER] Download aborted: Wi-Fi not connected (status=%d).\n", (int)WiFi.status());
     return false;
   }
 
-  Serial.println("[WALLPAPER] ========================================");
-  Serial.printf("[WALLPAPER] Wallpaper download started from: %s\n", url);
+  Serial.println("[WALLPAPER] Checking cloud wallpaper for updates...");
 
   WiFiClientSecure client;
   time_t now = time(nullptr);
   if (now >= 1700000000) {
     client.setCACert(GITHUB_ROOT_CA);
-    Serial.println("[WALLPAPER] TLS validation: Using ISRG Root X1 CA certificate.");
   } else {
     client.setInsecure();
-    Serial.println("[WALLPAPER] TLS validation: NTP time not synced; using fallback SSL mode.");
   }
 
   HTTPClient http;
   http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
-  http.setTimeout(12000);
+  http.setTimeout(10000);
   http.setConnectTimeout(6000);
   http.setUserAgent("COSMO-ESP32");
   http.addHeader("Accept", "image/jpeg, */*");
 
   if (!http.begin(client, url)) {
-    Serial.println("[WALLPAPER] ERROR: HTTPClient.begin failed!");
+    Serial.println("[WALLPAPER] ERROR: HTTPClient.begin failed during update check.");
     return false;
   }
 
   int httpCode = http.GET();
-  Serial.printf("[WALLPAPER] HTTP response code: %d\n", httpCode);
-
   if (httpCode != HTTP_CODE_OK) {
-    Serial.printf("[WALLPAPER] ERROR: Server returned HTTP %d (%s).\n", httpCode, http.errorToString(httpCode).c_str());
+    Serial.printf("[WALLPAPER] Update check: server returned HTTP %d (%s).\n", httpCode, http.errorToString(httpCode).c_str());
     http.end();
     return false;
   }
 
-  String contentType = http.header("Content-Type");
-  int contentLength = http.getSize();
-  Serial.printf("[WALLPAPER] Response content type: %s, expected size: %d bytes\n", contentType.c_str(), contentLength);
+  int remoteSize = http.getSize();
+  String etag = http.header("ETag");
+
+  // Check if we already have this wallpaper cached
+  size_t currentSize = 0;
+  if (LittleFS.exists(path)) {
+    File curF = LittleFS.open(path, FILE_READ);
+    if (curF) {
+      currentSize = curF.size();
+      curF.close();
+    }
+  }
+
+  // Check cached etag
+  String cachedEtag = "";
+  if (LittleFS.exists("/wallpaper.etag")) {
+    File etagF = LittleFS.open("/wallpaper.etag", FILE_READ);
+    if (etagF) {
+      cachedEtag = etagF.readString();
+      cachedEtag.trim();
+      etagF.close();
+    }
+  }
+
+  // If local file exists, is valid (> 1000 bytes), and matches remote size and ETag, skip download
+  if (currentSize > 1000 && remoteSize > 0 && (size_t)remoteSize == currentSize && (etag.length() == 0 || etag == cachedEtag)) {
+    Serial.printf("[WALLPAPER] Cache is up to date (%u bytes). No download needed.\n", (unsigned int)currentSize);
+    http.end();
+    return false;
+  }
+
+  Serial.println("[WALLPAPER] ========================================");
+  Serial.printf("[WALLPAPER] Wallpaper update available (remote: %d bytes vs local: %u bytes). Downloading...\n",
+                remoteSize, (unsigned int)currentSize);
 
   // Staging file in LittleFS to protect existing cache
   const char* tempPath = "/wallpaper.tmp";
@@ -392,7 +413,7 @@ bool downloadWallpaper(const char* url, const char* path) {
   Serial.printf("[WALLPAPER] Actual downloaded byte count: %d bytes\n", bytesWritten);
 
   if (bytesWritten < 1000) {
-    Serial.printf("[WALLPAPER] ERROR: Download incomplete (%d bytes). Aborting.\n", bytesWritten);
+    Serial.printf("[WALLPAPER] ERROR: Download incomplete (%d bytes). Preserving existing cache.\n", bytesWritten);
     LittleFS.remove(tempPath);
     return false;
   }
@@ -411,7 +432,7 @@ bool downloadWallpaper(const char* url, const char* path) {
   Serial.printf("[WALLPAPER] File write result: Stored size = %u bytes\n", (unsigned int)storedSize);
 
   if (header[0] != 0xFF || header[1] != 0xD8) {
-    Serial.printf("[WALLPAPER] JPEG validation result: FAILED (magic bytes 0x%02X 0x%02X, expected 0xFF 0xD8). Removing.\n", header[0], header[1]);
+    Serial.printf("[WALLPAPER] JPEG validation result: FAILED (magic bytes 0x%02X 0x%02X, expected 0xFF 0xD8). Preserving cache.\n", header[0], header[1]);
     LittleFS.remove(tempPath);
     return false;
   }
@@ -422,7 +443,7 @@ bool downloadWallpaper(const char* url, const char* path) {
                 (jres == JDR_OK ? "VALID JPEG" : "CORRUPT JPEG"), (int)jres, jw, jh);
 
   if (jres != JDR_OK) {
-    Serial.printf("[WALLPAPER] ERROR: TJpg_Decoder header parse failed with code %d. Removing.\n", (int)jres);
+    Serial.printf("[WALLPAPER] ERROR: TJpg_Decoder header parse failed with code %d. Preserving cache.\n", (int)jres);
     LittleFS.remove(tempPath);
     return false;
   }
@@ -436,9 +457,23 @@ bool downloadWallpaper(const char* url, const char* path) {
     return false;
   }
 
+  // Save new ETag if provided
+  if (etag.length() > 0) {
+    File etagF = LittleFS.open("/wallpaper.etag", FILE_WRITE);
+    if (etagF) {
+      etagF.print(etag);
+      etagF.close();
+    }
+  }
+
   Serial.printf("[WALLPAPER] Final file size: %s is %u bytes. Successfully cached!\n", path, (unsigned int)storedSize);
   Serial.println("[WALLPAPER] ========================================");
+  wallpaperLoaded = true;
   return true;
+}
+
+bool downloadWallpaper(const char* url, const char* path) {
+  return checkAndUpdateWallpaper(url, path);
 }
 
 bool renderWallpaper() {
@@ -572,13 +607,13 @@ uint16_t getAppColour(int index) {
   switch (index) {
 
     case 0: return BLUE;     // Magic 8 Ball
-    case 1: return PURPLE;   // Akinator
+    case 1: return 0x2965;   // Chess (Slate Blue)
     case 2: return 0x07E0;   // Snake (Green)
     case 3: return CYAN;     // Tetris (Cyan)
     case 4: return DARKBLUE; // Simon Says (Dark Blue)
     case 5: return YELLOW;   // Reminders (Yellow)
 
-    default: return PURPLE;
+    default: return 0x2965;
   }
 }
 
@@ -644,21 +679,13 @@ void drawAppIcon(
   }
 
   else if (index == 1) {
-    // Akinator
-    g.fillCircle(
-      x, y - 4,
-      radius / 3,
-      whiteColour
-    );
-
-    g.fillCircle(
-      x, y + radius / 3,
-      radius / 2,
-      blueColour
-    );
-
-    g.fillCircle(x - 5, y - 5, 2, bgColour);
-    g.fillCircle(x + 5, y - 5, 2, bgColour);
+    // Chess: Stylized King piece with crown & base
+    uint16_t goldColour = dimColor(0xFEA0, brightness);
+    g.drawFastVLine(x, y - 9, 4, goldColour);
+    g.drawFastHLine(x - 2, y - 7, 5, goldColour);
+    g.fillRoundRect(x - 6, y - 5, 12, 5, 2, goldColour);
+    g.fillRoundRect(x - 4, y, 8, 5, 2, whiteColour);
+    g.fillRoundRect(x - 7, y + 5, 14, 4, 1, goldColour);
   }
 
   else if (index == 2) {
@@ -1155,7 +1182,7 @@ void openApp() {
       break;
 
     case 1:
-      akinator.init(AKINATOR_SERVER_URL);
+      chess.init();
       break;
 
     case 2:
@@ -1333,6 +1360,9 @@ void setup() {
     } else {
       Serial.println("[NTP] Clock sync timed out; continuing (TLS fallback active).");
     }
+
+    // Check remote wallpaper for any cloud updates
+    checkAndUpdateWallpaper(COSMO_WALLPAPER_URL, WALLPAPER_CACHE_PATH);
   }
 
   lastInteraction = millis();
@@ -1371,8 +1401,16 @@ void loop() {
         goLauncher();
         return;
       }
+    } else if (appIndex == 1) {
+      // Chess: manages menu internally, and signals wantsToExit()
+      if (chess.wantsToExit()) {
+        chess.resetExit();
+        waitForButtonRelease();
+        goLauncher();
+        return;
+      }
     } else {
-      // Magic 8 Ball (0), Akinator (1), Snake (2), Tetris (3), Reminders (5)
+      // Magic 8 Ball (0), Snake (2), Tetris (3), Reminders (5)
       if (bothHeld()) {
         waitForButtonRelease();
         goLauncher();
@@ -1387,15 +1425,12 @@ void loop() {
 
   if (screen == HOME) {
 
-    if (!wallpaperLoaded && WiFi.status() == WL_CONNECTED) {
-      static unsigned long lastWallpaperRetry = 0;
-      if (millis() - lastWallpaperRetry >= 5000) {
-        lastWallpaperRetry = millis();
-        Serial.println("[WALLPAPER] Background recovery: Wi-Fi connected, attempting wallpaper recovery...");
-        if (downloadWallpaper(COSMO_WALLPAPER_URL, WALLPAPER_CACHE_PATH)) {
-          drawHome();
-          return;
-        }
+    static unsigned long lastWallpaperCheck = 0;
+    if (WiFi.status() == WL_CONNECTED && (millis() - lastWallpaperCheck >= 30000 || !wallpaperLoaded)) {
+      lastWallpaperCheck = millis();
+      if (checkAndUpdateWallpaper(COSMO_WALLPAPER_URL, WALLPAPER_CACHE_PATH)) {
+        drawHome();
+        return;
       }
     }
 
@@ -1471,10 +1506,16 @@ void loop() {
       return;
     }
 
-    // Akinator (1)
+    // Chess (1)
     if (appIndex == 1) {
-      akinator.update(leftPressed, rightPressed, selectPressed);
-      if (leftPressed || rightPressed || selectPressed || akinator.isActive()) {
+      chess.update(leftPressed, rightPressed, selectPressed);
+      if (chess.wantsToExit()) {
+        chess.resetExit();
+        waitForButtonRelease();
+        goLauncher();
+        return;
+      }
+      if (leftPressed || rightPressed || selectPressed || chess.isActive()) {
         lastInteraction = millis();
       }
       return;
@@ -1530,7 +1571,7 @@ void loop() {
   // ==================================
 
   bool inActiveGame = (screen == APP && (
-    (appIndex == 1 && akinator.isActive()) ||
+    (appIndex == 1 && chess.isActive()) ||
     (appIndex == 2 && snake.isActive()) ||
     (appIndex == 3 && tetris.isActive()) ||
     (appIndex == 4 && simon.isActive())
