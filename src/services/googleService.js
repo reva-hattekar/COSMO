@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { getDatabase } = require('../db/connection');
 
 const TOKENS_FILE = path.join(__dirname, '../../data/google_tokens.json');
 
@@ -15,6 +16,7 @@ class GoogleService {
         this.clientSecret = process.env.GOOGLE_CLIENT_SECRET || '';
         this.redirectUri = process.env.GOOGLE_REDIRECT_URI || 'http://localhost:3000/api/google/callback';
         this.oauthStates = new Map(); // state -> expiresAt (timestamp)
+        this._tokenCache = null;
     }
 
     /**
@@ -53,11 +55,18 @@ class GoogleService {
         }
     }
 
+    /**
+     * Synchronous getter for current tokens (cached or from file).
+     */
     getTokens() {
+        if (this._tokenCache) {
+            return this._tokenCache;
+        }
         try {
             if (fs.existsSync(TOKENS_FILE)) {
                 const data = fs.readFileSync(TOKENS_FILE, 'utf8');
-                return JSON.parse(data);
+                this._tokenCache = JSON.parse(data);
+                return this._tokenCache;
             }
         } catch (err) {
             console.error('[GoogleService] Error reading tokens file:', err.message);
@@ -66,33 +75,103 @@ class GoogleService {
     }
 
     /**
-     * Save tokens to file.
+     * Asynchronously loads tokens from database (PostgreSQL/SQLite) if available,
+     * updating internal cache.
+     */
+    async loadTokensFromDb() {
+        try {
+            const db = getDatabase();
+            if (db) {
+                await db.open();
+                const row = await db.get(
+                    'SELECT access_token, refresh_token, expires_at, updated_at FROM google_tokens WHERE id = ?',
+                    ['default']
+                );
+                if (row && (row.access_token || row.refresh_token)) {
+                    this._tokenCache = {
+                        access_token: row.access_token,
+                        refresh_token: row.refresh_token,
+                        expires_at: row.expires_at ? Number(row.expires_at) : null,
+                        updated_at: row.updated_at
+                    };
+                    return this._tokenCache;
+                }
+            }
+        } catch (dbErr) {
+            // DB not ready or table doesn't exist yet
+        }
+        return this.getTokens();
+    }
+
+    /**
+     * Save tokens to internal cache, local file mirror, and PostgreSQL/database.
      * CRITICAL: Preserves existing refresh_token if new payload does not provide one.
      * Never overwrites a valid refresh token with undefined, null, or empty string.
      */
     saveTokens(tokens) {
+        if (!tokens || typeof tokens !== 'object') {
+            return false;
+        }
+
+        const existing = this.getTokens();
+        if (existing && existing.refresh_token && typeof existing.refresh_token === 'string' && existing.refresh_token.trim().length > 0) {
+            if (!tokens.refresh_token || typeof tokens.refresh_token !== 'string' || tokens.refresh_token.trim().length === 0) {
+                tokens.refresh_token = existing.refresh_token.trim();
+            }
+        }
+
+        this._tokenCache = tokens;
+
+        // Persist to local file mirror
         try {
-            if (!tokens || typeof tokens !== 'object') {
-                return false;
-            }
-
-            const existing = this.getTokens();
-            if (existing && existing.refresh_token && typeof existing.refresh_token === 'string' && existing.refresh_token.trim().length > 0) {
-                if (!tokens.refresh_token || typeof tokens.refresh_token !== 'string' || tokens.refresh_token.trim().length === 0) {
-                    tokens.refresh_token = existing.refresh_token.trim();
-                }
-            }
-
             const dir = path.dirname(TOKENS_FILE);
             if (!fs.existsSync(dir)) {
                 fs.mkdirSync(dir, { recursive: true });
             }
             fs.writeFileSync(TOKENS_FILE, JSON.stringify(tokens, null, 2), 'utf8');
-            console.log('[GoogleService] Tokens saved successfully.');
-            return true;
         } catch (err) {
             console.error('[GoogleService] Error writing tokens file:', err.message);
-            return false;
+        }
+
+        // Asynchronously persist to database table google_tokens
+        this._saveTokensToDb(tokens).catch(err => {
+            // Ignore background write error
+        });
+
+        console.log('[GoogleService] Tokens saved successfully.');
+        return true;
+    }
+
+    async _saveTokensToDb(tokens) {
+        try {
+            const db = getDatabase();
+            if (db) {
+                await db.open();
+                const sql = (db.type === 'postgres')
+                    ? `INSERT INTO google_tokens (id, access_token, refresh_token, expires_at, updated_at)
+                       VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
+                       ON CONFLICT (id) DO UPDATE SET
+                           access_token = EXCLUDED.access_token,
+                           refresh_token = COALESCE(NULLIF(EXCLUDED.refresh_token, ''), google_tokens.refresh_token),
+                           expires_at = EXCLUDED.expires_at,
+                           updated_at = CURRENT_TIMESTAMP`
+                    : `INSERT INTO google_tokens (id, access_token, refresh_token, expires_at, updated_at)
+                       VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+                       ON CONFLICT (id) DO UPDATE SET
+                           access_token = excluded.access_token,
+                           refresh_token = COALESCE(NULLIF(excluded.refresh_token, ''), google_tokens.refresh_token),
+                           expires_at = excluded.expires_at,
+                           updated_at = CURRENT_TIMESTAMP`;
+
+                await db.run(sql, [
+                    'default',
+                    tokens.access_token || null,
+                    tokens.refresh_token || null,
+                    tokens.expires_at || null
+                ]);
+            }
+        } catch (e) {
+            // DB not ready or table doesn't exist
         }
     }
 
@@ -135,6 +214,7 @@ class GoogleService {
             throw new Error(data.error_description || data.error || 'Failed to exchange authorization code');
         }
 
+        await this.loadTokensFromDb();
         const existingTokens = this.getTokens();
         // Preserve existing refresh token if new response omits it
         let refreshToken = (data.refresh_token && typeof data.refresh_token === 'string' && data.refresh_token.trim().length > 0)
@@ -153,6 +233,7 @@ class GoogleService {
     }
 
     async getValidAccessToken() {
+        await this.loadTokensFromDb();
         let tokens = this.getTokens();
         if (!tokens || !tokens.refresh_token || !tokens.refresh_token.trim()) {
             return null;
@@ -198,10 +279,19 @@ class GoogleService {
     }
 
     async getStatus() {
-        const tokens = this.getTokens();
-        if (!tokens || !tokens.refresh_token || !tokens.refresh_token.trim()) {
+        if (!this.clientId || !this.clientSecret) {
             return {
-                configured: Boolean(this.clientId && this.clientSecret),
+                configured: false,
+                authenticated: false,
+                message: 'Google OAuth not configured. Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET.'
+            };
+        }
+
+        await this.loadTokensFromDb();
+        const tokens = this.getTokens();
+        if (!tokens || !tokens.refresh_token) {
+            return {
+                configured: true,
                 authenticated: false,
                 message: 'No Google account connected. Visit /api/google/auth to authenticate.'
             };

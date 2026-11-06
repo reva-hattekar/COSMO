@@ -167,6 +167,15 @@ async function runTests() {
         } else if (fs.existsSync(TOKENS_PATH)) {
             fs.unlinkSync(TOKENS_PATH);
         }
+        googleService._tokenCache = null;
+        try {
+            const { getDatabase } = require('../src/db/connection');
+            const db = getDatabase();
+            await db.open();
+            await db.run('DELETE FROM google_tokens WHERE id = ?', ['default']);
+        } catch (e) {
+            // Ignore cleanup error
+        }
     }
 
     // ----------------------------------------------------

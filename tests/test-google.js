@@ -39,6 +39,23 @@ async function runTests() {
     console.log('       COSMO GOOGLE REMINDERS API TESTS      ');
     console.log('==============================================');
 
+    const fs = require('fs');
+    const path = require('path');
+    const googleService = require('../src/services/googleService');
+    const tokenFile = path.join(__dirname, '../data/google_tokens.json');
+    let backupTokens = null;
+    if (fs.existsSync(tokenFile)) {
+        backupTokens = fs.readFileSync(tokenFile, 'utf8');
+        fs.unlinkSync(tokenFile);
+    }
+    googleService._tokenCache = null;
+    try {
+        const { getDatabase } = require('../src/db/connection');
+        const db = getDatabase();
+        await db.open();
+        await db.run('DELETE FROM google_tokens WHERE id = ?', ['default']);
+    } catch (e) {}
+
     server = app.listen(TEST_PORT, '127.0.0.1');
     await new Promise(r => setTimeout(r, 200));
 
@@ -84,6 +101,10 @@ async function runTests() {
         console.log('==============================================\n');
     } finally {
         server.close();
+        if (backupTokens !== null) {
+            fs.writeFileSync(tokenFile, backupTokens, 'utf8');
+        }
+        googleService._tokenCache = null;
     }
 
     if (failed > 0) process.exit(1);

@@ -12,7 +12,9 @@
     "test:api": "node tests/test-api.js",
     "test:google": "node tests/test-google.js",
     "test:railway": "node tests/test-railway-hardening.js",
-    "test:all": "node tests/test-db.js && node tests/test-api.js && node tests/test-google.js && node tests/test-railway-hardening.js",
+    "test:neon": "node tests/test-postgres-neon.js",
+    "test:all": "node tests/test-db.js && node tests/test-api.js && node tests/test-google.js && node tests/test-railway-hardening.js && node tests/test-postgres-neon.js",
+    "migrate:neon": "node scripts/migrate-sqlite-to-neon.js",
     "test:ingestion": "node tests/test-ingestion.js",
     "import:500": "node src/ingestion/cli.js test-500",
     "import:quality": "node src/ingestion/cli.js quality",
@@ -26,6 +28,7 @@
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "express-rate-limit": "^7.5.0",
+    "pg": "^8.20.0",
     "sqlite3": "^6.0.1"
   }
 }

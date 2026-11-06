@@ -29,9 +29,12 @@ app.use("/api/google", googleRoutes);
 // Health check
 app.get("/health", async (req, res) => {
     let dbStatus = "connected";
+    let dbEngine = "unknown";
     try {
         const db = getDatabase();
         await db.get("SELECT 1");
+        dbStatus = "connected";
+        dbEngine = db.type || (process.env.DATABASE_URL ? "postgres" : "sqlite");
     } catch (e) {
         dbStatus = "disconnected: " + e.message;
     }
@@ -39,7 +42,8 @@ app.get("/health", async (req, res) => {
     res.json({
         status: "online",
         service: "COSMO Backend Engine",
-        database: dbStatus
+        database: dbStatus,
+        databaseEngine: dbEngine
     });
 });
 

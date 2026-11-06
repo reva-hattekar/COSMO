@@ -22,13 +22,17 @@ class DatabaseQueries {
     }
 
     async getCategories() {
-        return this.db.all(`
+        const rows = await this.db.all(`
             SELECT c.*, COUNT(e.id) as entity_count
             FROM categories c
             LEFT JOIN entities e ON e.category = c.name
             GROUP BY c.id
             ORDER BY entity_count DESC, c.name ASC
         `);
+        return rows.map(r => ({
+            ...r,
+            entity_count: parseInt(r.entity_count, 10) || 0
+        }));
     }
 
     // ==========================================
@@ -106,8 +110,12 @@ class DatabaseQueries {
             existing = await this.db.get('SELECT id FROM entities WHERE wikidata_id = ?', [wikidata_id]);
         }
         if (!existing) {
-            existing = await this.db.get('SELECT id FROM entities WHERE name = ? COLLATE NOCASE AND category = ?', [name, category]);
+            existing = await this.db.get('SELECT id FROM entities WHERE LOWER(name) = LOWER(?) AND category = ?', [name, category]);
         }
+
+        const rankExpr = (this.db.type === 'postgres')
+            ? 'popularity_rank = LEAST(popularity_rank, ?)'
+            : 'popularity_rank = MIN(popularity_rank, ?)';
 
         if (existing) {
             await this.db.run(
@@ -125,7 +133,7 @@ class DatabaseQueries {
                     death_date = COALESCE(?, death_date),
                     debut_year = COALESCE(?, debut_year),
                     is_fictional = ?,
-                    popularity_rank = MIN(popularity_rank, ?),
+                    ${rankExpr},
                     source = ?
                 WHERE id = ?`,
                 [
@@ -178,9 +186,9 @@ class DatabaseQueries {
             SELECT DISTINCT e.*
             FROM entities e
             LEFT JOIN aliases a ON a.entity_id = e.id
-            WHERE e.name LIKE ? COLLATE NOCASE
-               OR a.alias LIKE ? COLLATE NOCASE
-               OR e.description LIKE ? COLLATE NOCASE
+            WHERE LOWER(e.name) LIKE LOWER(?)
+               OR LOWER(a.alias) LIKE LOWER(?)
+               OR LOWER(e.description) LIKE LOWER(?)
             ORDER BY e.popularity_rank ASC, e.name ASC
             LIMIT ?
         `, [term, term, term, limit]);
@@ -199,7 +207,7 @@ class DatabaseQueries {
         return this.db.run(`
             INSERT INTO entity_attributes (entity_id, attribute_id, attribute_value, confidence, source)
             VALUES (?, ?, ?, ?, ?)
-            ON CONFLICT(entity_id, attribute_id, attribute_value) DO UPDATE SET
+            ON CONFLICT (entity_id, attribute_id, attribute_value) DO UPDATE SET
                 confidence = excluded.confidence,
                 source = excluded.source
         `, [entityId, attributeId, strVal, confidence, source]);
@@ -250,10 +258,11 @@ class DatabaseQueries {
         const trimmed = alias.trim();
         if (!trimmed) return;
 
-        return this.db.run(`
-            INSERT OR IGNORE INTO aliases (entity_id, alias, language)
-            VALUES (?, ?, ?)
-        `, [entityId, trimmed, language]);
+        const sql = (this.db.type === 'postgres')
+            ? `INSERT INTO aliases (entity_id, alias, language) VALUES (?, ?, ?) ON CONFLICT (entity_id, alias) DO NOTHING`
+            : `INSERT OR IGNORE INTO aliases (entity_id, alias, language) VALUES (?, ?, ?)`;
+
+        return this.db.run(sql, [entityId, trimmed, language]);
     }
 
     async getEntityAliases(entityId) {
@@ -341,23 +350,22 @@ class DatabaseQueries {
                     COUNT(ea.entity_id) as coverage_count
                 FROM attributes a
                 LEFT JOIN entity_attributes ea ON ea.attribute_id = a.id
-                GROUP BY a.id
+                GROUP BY a.id, a.attribute_key, a.attribute_name
                 ORDER BY coverage_count DESC
                 LIMIT 10
             `)
         ]);
 
         return {
-            totalEntities: entityCount.count,
-            totalAttributes: attributeCount.count,
-            totalEntityAttributes: entityAttrCount.count,
-            totalAliases: aliasCount.count,
-            categories: categories,
-            entityDistribution: fictionalStats,
-            topAttributes: topAttributes
+            totalEntities: parseInt(entityCount ? entityCount.count : 0, 10) || 0,
+            totalAttributes: parseInt(attributeCount ? attributeCount.count : 0, 10) || 0,
+            totalEntityAttributes: parseInt(entityAttrCount ? entityAttrCount.count : 0, 10) || 0,
+            totalAliases: parseInt(aliasCount ? aliasCount.count : 0, 10) || 0,
+            categories: categories.map(c => ({ ...c, count: parseInt(c.count, 10) || 0 })),
+            entityDistribution: fictionalStats.map(f => ({ ...f, count: parseInt(f.count, 10) || 0 })),
+            topAttributes: topAttributes.map(a => ({ ...a, coverage_count: parseInt(a.coverage_count, 10) || 0 }))
         };
     }
 }
 
 module.exports = DatabaseQueries;
-

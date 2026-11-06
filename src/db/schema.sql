@@ -81,6 +81,15 @@ CREATE TABLE IF NOT EXISTS import_progress (
     completed_at DATETIME
 );
 
+-- 7. Google OAuth Tokens (Persistent token storage)
+CREATE TABLE IF NOT EXISTS google_tokens (
+    id TEXT PRIMARY KEY DEFAULT 'default',
+    access_token TEXT,
+    refresh_token TEXT,
+    expires_at INTEGER,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Indexes for lightning-fast candidate filtering and question selection
 CREATE INDEX IF NOT EXISTS idx_entities_name ON entities(name COLLATE NOCASE);
 CREATE INDEX IF NOT EXISTS idx_entities_wikidata_id ON entities(wikidata_id);
