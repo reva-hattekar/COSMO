@@ -90,12 +90,13 @@ private:
   volatile bool syncDone;
   SemaphoreHandle_t dataMutex;
   SyncTaskResult stagingResult;
-  ReminderEntry stagingItems[MAX_REMINDERS];
+  ReminderEntry* stagingItems;
   int stagingCount;
   RemindersSyncState stagingSyncState;
-  String stagingPayload;
+  String* stagingPayload;
   TaskHandle_t syncTaskHandle;
 
+  bool ensureMutex();
   static void syncTaskTrampoline(void* param);
   void runSyncTask();
 

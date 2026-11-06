@@ -38,12 +38,14 @@ RemindersApp::RemindersApp(Adafruit_GC9A01A& display)
     syncDone(false),
     dataMutex(NULL),
     stagingResult(SYNC_RES_NONE),
+    stagingItems(NULL),
     stagingCount(0),
     stagingSyncState(REMINDERS_SYNC_NEVER),
+    stagingPayload(NULL),
     syncTaskHandle(NULL) {
-  dataMutex = xSemaphoreCreateMutex();
+  // CRITICAL: Do NOT call xSemaphoreCreateMutex() or any FreeRTOS API here!
+  // This constructor runs during C++ static init before the FreeRTOS scheduler starts.
   memset(items, 0, sizeof(items));
-  memset(stagingItems, 0, sizeof(stagingItems));
   snprintf(statusMessage, sizeof(statusMessage), "Initializing...");
   strncpy(backendUrl, "https://cosmo-pcju.onrender.com/api/google/reminders", sizeof(backendUrl) - 1);
   backendUrl[sizeof(backendUrl) - 1] = '\0';
@@ -54,6 +56,21 @@ RemindersApp::~RemindersApp() {
     vSemaphoreDelete(dataMutex);
     dataMutex = NULL;
   }
+  if (stagingItems) {
+    free(stagingItems);
+    stagingItems = NULL;
+  }
+  if (stagingPayload) {
+    delete stagingPayload;
+    stagingPayload = NULL;
+  }
+}
+
+bool RemindersApp::ensureMutex() {
+  if (dataMutex == NULL) {
+    dataMutex = xSemaphoreCreateMutex();
+  }
+  return dataMutex != NULL;
 }
 
 void RemindersApp::setBackendUrl(const char* url) {
@@ -64,6 +81,7 @@ void RemindersApp::setBackendUrl(const char* url) {
 }
 
 void RemindersApp::init() {
+  ensureMutex();
   exitRequested = false;
   active = true;
   viewMode = REMINDERS_VIEW_CARD;
@@ -96,17 +114,22 @@ void RemindersApp::resetExit() {
 }
 
 void RemindersApp::maintain(bool wifiConnected) {
+  ensureMutex();
+
   // Handle completion of background sync task safely on main thread
   if (syncDone) {
     if (dataMutex && xSemaphoreTake(dataMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
       syncDone = false;
       SyncTaskResult res = stagingResult;
       int count = stagingCount;
-      String payload = stagingPayload;
-      stagingPayload = ""; // Immediately reclaim JSON payload string from RAM
+      String payload = (stagingPayload != NULL) ? *stagingPayload : "";
+      if (stagingPayload) {
+        delete stagingPayload;
+        stagingPayload = NULL; // Free payload string immediately
+      }
 
-      if (res == SYNC_RES_OK) {
-        memcpy(items, stagingItems, sizeof(items));
+      if (res == SYNC_RES_OK && stagingItems != NULL) {
+        memcpy(items, stagingItems, sizeof(ReminderEntry) * count);
         itemCount = count;
         if (currentIndex >= itemCount) currentIndex = 0;
         syncState = REMINDERS_SYNC_OK_LIVE;
@@ -129,6 +152,11 @@ void RemindersApp::maintain(bool wifiConnected) {
           snprintf(statusMessage, sizeof(statusMessage), "Sync failed");
         }
         needsRedraw = true;
+      }
+
+      if (stagingItems) {
+        free(stagingItems);
+        stagingItems = NULL; // Free staging array immediately
       }
 
       xSemaphoreGive(dataMutex);
@@ -188,6 +216,8 @@ void RemindersApp::syncTaskTrampoline(void* param) {
 void RemindersApp::runSyncTask() {
   Serial.printf("[REMINDERS] Non-blocking background sync starting: %s\n", backendUrl);
   Serial.printf("[REMINDERS] Free Heap before TLS handshake: %u bytes\n", ESP.getFreeHeap());
+
+  ensureMutex();
 
   time_t now = time(nullptr);
   if (now < 1700000000) {
@@ -265,12 +295,27 @@ void RemindersApp::runSyncTask() {
   stagingResult = taskResult;
   stagingSyncState = parsedState;
   if (taskResult == SYNC_RES_OK) {
-    memcpy(stagingItems, parsedItems, sizeof(stagingItems));
-    stagingCount = parsedCount;
-    stagingPayload = payload;
+    if (!stagingItems) {
+      stagingItems = (ReminderEntry*)malloc(sizeof(ReminderEntry) * MAX_REMINDERS);
+    }
+    if (stagingItems) {
+      memcpy(stagingItems, parsedItems, sizeof(ReminderEntry) * parsedCount);
+      stagingCount = parsedCount;
+    } else {
+      stagingCount = 0;
+      stagingResult = SYNC_RES_FAIL;
+    }
+    if (!stagingPayload) {
+      stagingPayload = new String(payload);
+    } else {
+      *stagingPayload = payload;
+    }
   } else {
     stagingCount = 0;
-    stagingPayload = "";
+    if (stagingPayload) {
+      delete stagingPayload;
+      stagingPayload = NULL;
+    }
   }
   syncDone = true;
   syncing = false;
@@ -309,6 +354,8 @@ bool RemindersApp::syncFeed(bool force) {
     return false;
   }
 
+  ensureMutex();
+
   lastSyncAttempt = millis();
   syncing = true;
   syncDone = false;
@@ -316,7 +363,7 @@ bool RemindersApp::syncFeed(bool force) {
   BaseType_t res = xTaskCreatePinnedToCore(
     syncTaskTrampoline,
     "remSyncTask",
-    10240,       // 10 KB stack for TLS handshake + mbedtls + JSON parse
+    8192,        // 8 KB stack for TLS handshake + mbedtls + JSON parse
     this,
     1,           // Priority 1 (normal background priority)
     &syncTaskHandle,

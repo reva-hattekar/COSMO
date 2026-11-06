@@ -282,7 +282,7 @@ const unsigned long WIFI_RETRY = 10000;
 const int CANVAS_W = 200;
 const int CANVAS_H = 130;
 
-GFXcanvas16 carouselCanvas(CANVAS_W, CANVAS_H);
+GFXcanvas16* carouselCanvas = nullptr;
 
 bool canvasAvailable = false;
 
@@ -794,7 +794,7 @@ const char* iconCachePaths[APP_COUNT] = {
   "/icon_reminders.jpg"
 };
 
-static uint16_t s_iconRawBuf[80 * 80];
+static uint16_t* s_iconRawBuf = nullptr;
 static int s_cachedRawIndex = -1;
 static uint32_t s_iconCallbackCount = 0;
 
@@ -825,6 +825,7 @@ void auditIconCache() {
 
 bool tjpgIconDecodeCallback(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t* bitmap) {
   s_iconCallbackCount++;
+  if (!s_iconRawBuf) return 0;
   for (int j = 0; j < h; j++) {
     int py = y + j;
     if (py < 0 || py >= 80) continue;
@@ -1203,8 +1204,8 @@ void drawAppIcon(
       }
     }
 
-    if (s_cachedRawIndex == index) {
-      uint16_t* canvasBuf = carouselCanvas.getBuffer();
+    if (s_cachedRawIndex == index && s_iconRawBuf != nullptr) {
+      uint16_t* canvasBuf = carouselCanvas ? carouselCanvas->getBuffer() : nullptr;
       if (canvasBuf) {
         // Inner clipping boundary
         int targetR = radius - (radius < 35 ? 3 : 5);
@@ -1297,8 +1298,9 @@ float easeInOutCubic(float t) {
 // ======================================
 
 void renderCarousel(float progress) {
+  if (!carouselCanvas) return;
 
-  carouselCanvas.fillScreen(BG);
+  carouselCanvas->fillScreen(BG);
 
   float offset = 0;
 
@@ -1347,7 +1349,7 @@ void renderCarousel(float progress) {
     if (brightness > 1.0f) brightness = 1.0f;
 
     drawAppIcon(
-      carouselCanvas,
+      *carouselCanvas,
       index,
       (int)x,
       65,
@@ -1362,14 +1364,14 @@ void renderCarousel(float progress) {
 
 void presentCarousel() {
 
-  if (!canvasAvailable) {
+  if (!canvasAvailable || !carouselCanvas) {
     return;
   }
 
   tft.drawRGBBitmap(
     CANVAS_X,
     CANVAS_Y,
-    carouselCanvas.getBuffer(),
+    carouselCanvas->getBuffer(),
     CANVAS_W,
     CANVAS_H
   );
@@ -1886,23 +1888,21 @@ void setup() {
 
   tft.fillScreen(BG);
 
-  // Check that the canvas successfully allocated memory.
-  canvasAvailable =
-    carouselCanvas.getBuffer() != nullptr;
+  // Allocate carousel canvas dynamically after FreeRTOS kernel has started
+  carouselCanvas = new GFXcanvas16(CANVAS_W, CANVAS_H);
+  canvasAvailable = (carouselCanvas != nullptr && carouselCanvas->getBuffer() != nullptr);
 
   if (!canvasAvailable) {
-
-    Serial.println(
-      "ERROR: Carousel canvas allocation failed!"
-    );
-
+    Serial.println("ERROR: Carousel canvas allocation failed!");
     while (true) {
       delay(1000);
     }
   }
 
-  Serial.println("Carousel canvas ready.");
+  Serial.printf("[DISPLAY] Carousel canvas ready (%dx%d). Free Heap: %u bytes\n",
+                CANVAS_W, CANVAS_H, ESP.getFreeHeap());
 
+  // Allocate clock background restoration buffer
   if (!s_clockBg) {
     s_clockBg = (uint16_t*)malloc(CLOCK_BG_W * CLOCK_BG_H * sizeof(uint16_t));
     if (s_clockBg) {
@@ -1910,6 +1910,17 @@ void setup() {
                     (unsigned int)(CLOCK_BG_W * CLOCK_BG_H * sizeof(uint16_t)), ESP.getFreeHeap());
     } else {
       Serial.println("[DISPLAY] WARNING: Failed to allocate clock background clearing cache. Fallback active.");
+    }
+  }
+
+  // Allocate launcher icon decoding buffer
+  if (!s_iconRawBuf) {
+    s_iconRawBuf = (uint16_t*)malloc(80 * 80 * sizeof(uint16_t));
+    if (s_iconRawBuf) {
+      Serial.printf("[DISPLAY] Allocated %u bytes for icon decode buffer. Free Heap: %u bytes\n",
+                    (unsigned int)(80 * 80 * sizeof(uint16_t)), ESP.getFreeHeap());
+    } else {
+      Serial.println("[DISPLAY] WARNING: Failed to allocate icon decode buffer. Fallback active.");
     }
   }
 
