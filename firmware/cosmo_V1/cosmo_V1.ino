@@ -10,6 +10,7 @@
 #include <Adafruit_GC9A01A.h>
 
 #include <Fonts/FreeSans9pt7b.h>
+#include <Fonts/FreeSansBold9pt7b.h>
 #include <Fonts/FreeSansBold12pt7b.h>
 
 struct Button {
@@ -556,6 +557,9 @@ bool renderWallpaper() {
 
   Serial.printf("[WALLPAPER] Decoded dimensions: %ux%u. Decoding JPEG blocks directly to GC9A01...\n", w, h);
 
+  TJpgDec.setJpgScale(1);
+  TJpgDec.setSwapBytes(false);
+  TJpgDec.setCallback(tjpgOutput);
   JRESULT decRes = TJpgDec.drawFsJpg(0, 0, WALLPAPER_CACHE_PATH, LittleFS);
   Serial.printf("[WALLPAPER] JPEG decoder result: %d (%s)\n", (int)decRes, (decRes == JDR_OK ? "JDR_OK" : "DECODE_ERROR"));
   Serial.printf("[WALLPAPER] Number of drawing callback invocations: %u\n", tjpgCallbackCount);
@@ -675,6 +679,163 @@ uint16_t dimColor(uint16_t color, float brightness) {
 }
 
 // ======================================
+// APPLICATION ICONS (LITTLEFS & TJPG)
+// ======================================
+
+const char* iconFileNames[APP_COUNT] = {
+  "icon_8ball.png",
+  "icon_chess.png",
+  "icon_snake.png",
+  "icon_tetris.png",
+  "icon_simon.png",
+  "icon_reminders.png"
+};
+
+const char* iconCachePaths[APP_COUNT] = {
+  "/icon_8ball.jpg",
+  "/icon_chess.jpg",
+  "/icon_snake.jpg",
+  "/icon_tetris.jpg",
+  "/icon_simon.jpg",
+  "/icon_reminders.jpg"
+};
+
+static int s_iconTargetX = 0;
+static int s_iconTargetY = 0;
+static int s_iconTargetR = 0;
+static float s_iconBrightness = 1.0f;
+
+bool tjpgIconOutput(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t* bitmap) {
+  uint16_t* buf = carouselCanvas.getBuffer();
+  if (!buf) return 0;
+
+  for (int j = 0; j < h; j++) {
+    int cy = y + j;
+    if (cy < 0 || cy >= CANVAS_H) continue;
+    int row = cy * CANVAS_W;
+    for (int i = 0; i < w; i++) {
+      int cx = x + i;
+      if (cx < 0 || cx >= CANVAS_W) continue;
+
+      int dx = cx - s_iconTargetX;
+      int dy = cy - s_iconTargetY;
+      if ((dx * dx + dy * dy) <= (s_iconTargetR * s_iconTargetR)) {
+        uint16_t pixel = bitmap[j * w + i];
+        if (s_iconBrightness < 0.99f) {
+          pixel = dimColor(pixel, s_iconBrightness);
+        }
+        buf[row + cx] = pixel;
+      }
+    }
+  }
+  return 1;
+}
+
+bool downloadIcon(int index) {
+  if (WiFi.status() != WL_CONNECTED) return false;
+  if (index < 0 || index >= APP_COUNT) return false;
+
+  char url[128];
+  snprintf(url, sizeof(url), "https://raw.githubusercontent.com/reva-hattekar/COSMO/main/assets/%s", iconFileNames[index]);
+  const char* destPath = iconCachePaths[index];
+
+  Serial.printf("[ICON] Downloading %s...\n", iconFileNames[index]);
+
+  WiFiClientSecure client;
+  time_t now = time(nullptr);
+  if (now >= 1700000000) {
+    client.setCACert(GITHUB_ROOT_CA);
+  } else {
+    client.setInsecure();
+  }
+
+  HTTPClient http;
+  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+  http.setTimeout(8000);
+  http.setConnectTimeout(5000);
+  http.setUserAgent("COSMO-ESP32");
+  http.addHeader("Accept", "image/jpeg, image/png, */*");
+
+  if (!http.begin(client, url)) {
+    Serial.printf("[ICON] Failed to begin HTTP for %s\n", iconFileNames[index]);
+    return false;
+  }
+
+  int httpCode = http.GET();
+  if (httpCode != HTTP_CODE_OK) {
+    Serial.printf("[ICON] HTTP error %d for %s\n", httpCode, iconFileNames[index]);
+    http.end();
+    return false;
+  }
+
+  const char* tempPath = "/icon_tmp.jpg";
+  File f = LittleFS.open(tempPath, FILE_WRITE);
+  if (!f) {
+    http.end();
+    return false;
+  }
+
+  int written = http.writeToStream(&f);
+  f.flush();
+  f.close();
+  http.end();
+
+  if (written < 500) {
+    Serial.printf("[ICON] Incomplete download for %s (%d bytes)\n", iconFileNames[index], written);
+    LittleFS.remove(tempPath);
+    return false;
+  }
+
+  File vf = LittleFS.open(tempPath, FILE_READ);
+  if (!vf) return false;
+  uint8_t hdr[2] = {0, 0};
+  vf.read(hdr, 2);
+  vf.close();
+
+  if (hdr[0] != 0xFF || hdr[1] != 0xD8) {
+    Serial.printf("[ICON] Validation failed for %s (not a valid JPEG: 0x%02X 0x%02X)\n", iconFileNames[index], hdr[0], hdr[1]);
+    LittleFS.remove(tempPath);
+    return false;
+  }
+
+  if (LittleFS.exists(destPath)) {
+    LittleFS.remove(destPath);
+  }
+  if (!LittleFS.rename(tempPath, destPath)) {
+    Serial.printf("[ICON] Failed to rename temp icon to %s\n", destPath);
+    return false;
+  }
+
+  Serial.printf("[ICON] SUCCESS: %s cached to %s (%d bytes)\n", iconFileNames[index], destPath, written);
+  return true;
+}
+
+void syncAppIcons() {
+  if (WiFi.status() != WL_CONNECTED) return;
+
+  for (int i = 0; i < APP_COUNT; i++) {
+    bool needDownload = true;
+    if (LittleFS.exists(iconCachePaths[i])) {
+      File f = LittleFS.open(iconCachePaths[i], FILE_READ);
+      if (f && f.size() >= 500) {
+        uint8_t hdr[2] = {0, 0};
+        f.read(hdr, 2);
+        f.close();
+        if (hdr[0] == 0xFF && hdr[1] == 0xD8) {
+          needDownload = false;
+        }
+      } else if (f) {
+        f.close();
+      }
+    }
+
+    if (needDownload) {
+      downloadIcon(i);
+    }
+  }
+}
+
+// ======================================
 // APP ICON DRAWING
 // ======================================
 
@@ -691,92 +852,44 @@ void drawAppIcon(
 
   uint16_t baseColour = dimColor(getAppColour(index), brightness);
   uint16_t whiteColour = dimColor(WHITE, brightness);
-  uint16_t darkBlueColour = dimColor(DARKBLUE, brightness);
-  uint16_t blueColour = dimColor(BLUE, brightness);
-  uint16_t bgColour = dimColor(BG, brightness);
 
   g.fillCircle(x, y, radius, baseColour);
   g.drawCircle(x, y, radius, whiteColour);
 
-  if (index == 0) {
-    // Magic 8 Ball
-    g.fillCircle(
-      x, y,
-      radius - 6,
-      darkBlueColour
-    );
+  const char* cachePath = iconCachePaths[index];
+  bool imageRendered = false;
 
+  if (LittleFS.exists(cachePath)) {
+    s_iconTargetX = x;
+    s_iconTargetY = y;
+    s_iconBrightness = brightness;
+
+    int scale = (radius < 35) ? 2 : 1;
+    TJpgDec.setJpgScale(scale);
+    TJpgDec.setSwapBytes(false);
+    TJpgDec.setCallback(tjpgIconOutput);
+
+    int imgW = (scale == 2) ? 40 : 80;
+    int startX = x - (imgW / 2);
+    int startY = y - (imgW / 2);
+
+    s_iconTargetR = radius - (scale == 2 ? 3 : 5);
+    if (s_iconTargetR < 4) s_iconTargetR = 4;
+
+    JRESULT res = TJpgDec.drawFsJpg(startX, startY, cachePath, LittleFS);
+    if (res == JDR_OK) {
+      imageRendered = true;
+    }
+  }
+
+  // Fallback emblem if not yet cached or if decode failed
+  if (!imageRendered) {
+    g.drawCircle(x, y, radius - 4, whiteColour);
     g.setFont(&FreeSansBold12pt7b);
     g.setTextColor(whiteColour);
-    g.setCursor(x - 8, y + 9);
-    g.print("8");
-  }
-
-  else if (index == 1) {
-    // Chess: Stylized King piece with crown & base
-    uint16_t goldColour = dimColor(0xFEA0, brightness);
-    g.drawFastVLine(x, y - 9, 4, goldColour);
-    g.drawFastHLine(x - 2, y - 7, 5, goldColour);
-    g.fillRoundRect(x - 6, y - 5, 12, 5, 2, goldColour);
-    g.fillRoundRect(x - 4, y, 8, 5, 2, whiteColour);
-    g.fillRoundRect(x - 7, y + 5, 14, 4, 1, goldColour);
-  }
-
-  else if (index == 2) {
-    // Snake
-    int s = radius / 3;
-    g.fillRoundRect(x - s, y - s / 2, s * 2, s, 3, dimColor(0x03E0, brightness));
-    g.fillCircle(x + s - 1, y, s / 2 + 1, dimColor(0x7FE0, brightness)); // head
-    g.fillCircle(x - s, y + s / 2, s / 3 + 1, dimColor(0xF800, brightness)); // red apple
-  }
-
-  else if (index == 3) {
-    // Tetris: Classic T-tetromino
-    int b = radius / 3;
-    uint16_t tetrisPurple = dimColor(PURPLE, brightness);
-    g.fillRect(x - b * 3 / 2, y - b, b, b, tetrisPurple);
-    g.fillRect(x - b / 2, y - b, b, b, tetrisPurple);
-    g.fillRect(x + b / 2, y - b, b, b, tetrisPurple);
-    g.fillRect(x - b / 2, y, b, b, tetrisPurple);
-
-    g.drawRect(x - b * 3 / 2, y - b, b, b, whiteColour);
-    g.drawRect(x - b / 2, y - b, b, b, whiteColour);
-    g.drawRect(x + b / 2, y - b, b, b, whiteColour);
-    g.drawRect(x - b / 2, y, b, b, whiteColour);
-  }
-
-  else if (index == 4) {
-    // Simon Says: 4 colored pads
-    int q = radius / 2;
-    g.fillRoundRect(x - q - 2, y - q - 2, q, q, 3, dimColor(0x07E0, brightness)); // Green
-    g.fillRoundRect(x + 2, y - q - 2, q, q, 3, dimColor(0xF800, brightness));     // Red
-    g.fillRoundRect(x - q - 2, y + 2, q, q, 3, dimColor(0xFFE0, brightness));     // Yellow
-    g.fillRoundRect(x + 2, y + 2, q, q, 3, dimColor(0x051F, brightness));         // Blue
-    g.fillCircle(x, y, q / 3 + 1, bgColour);
-  }
-
-  else if (index == 5) {
-    // Reminders
-    g.drawRoundRect(
-      x - radius / 2,
-      y - radius / 2,
-      radius,
-      radius,
-      4,
-      bgColour
-    );
-
-    g.drawLine(
-      x - 7, y - 5,
-      x + 7, y - 5,
-      bgColour
-    );
-
-    g.drawLine(
-      x - 7, y + 4,
-      x + 7, y + 4,
-      bgColour
-    );
+    const char initials[] = {'8', 'C', 'S', 'T', 'M', 'R'};
+    g.setCursor(x - 7, y + 8);
+    g.print(initials[index]);
   }
 }
 
@@ -1004,40 +1117,118 @@ void updateCarouselAnimation() {
 // MAGIC 8 BALL
 // ======================================
 
-void drawMagicScreen() {
+struct MagicAnswer {
+  const char* line1;
+  const char* line2;
+  const char* line3;
+};
 
+const MagicAnswer MAGIC_ANSWERS[20] = {
+  {"IT IS", "CERTAIN", nullptr},              // 0: It is certain.
+  {"WITHOUT A", "DOUBT", nullptr},            // 1: Without a doubt.
+  {"YOU MAY", "RELY ON", "IT"},               // 2: You may rely on it.
+  {"ABSOLUTELY!", nullptr, nullptr},          // 3: Absolutely!
+  {"SIGNS POINT", "TO YES", nullptr},         // 4: Signs point to yes.
+  {"MOST", "LIKELY", nullptr},                // 5: Most likely.
+  {"OUTLOOK", "GOOD", nullptr},               // 6: Outlook good.
+  {"YES,", "DEFINITELY", nullptr},            // 7: Yes, definitely.
+  {"AS I SEE IT,", "YES", nullptr},           // 8: As I see it, yes.
+  {"BETTER NOT", "TELL YOU", nullptr},        // 9: Better not tell you.
+  {"ASK AGAIN", "LATER", nullptr},            // 10: Ask again later.
+  {"CANNOT", "PREDICT", "NOW"},               // 11: Cannot predict now.
+  {"CONCENTRATE", "AND ASK", nullptr},        // 12: Concentrate and ask.
+  {"REPLY HAZY,", "TRY AGAIN", nullptr},      // 13: Reply hazy, try again.
+  {"DON'T COUNT", "ON IT", nullptr},          // 14: Don't count on it.
+  {"MY REPLY", "IS NO", nullptr},             // 15: My reply is no.
+  {"VERY", "DOUBTFUL", nullptr},              // 16: Very doubtful.
+  {"OUTLOOK", "NOT GOOD", nullptr},           // 17: Outlook not good.
+  {"MY SOURCES", "SAY NO", nullptr},          // 18: My sources say no.
+  {"ABSOLUTELY", "NOT", nullptr}              // 19: Absolutely not.
+};
+
+void drawMagic8BallBase() {
   tft.fillScreen(BG);
 
-  centerText(
-    "MAGIC 8 BALL",
-    53,
-    &FreeSansBold12pt7b,
-    CYAN
-  );
+  // 3D Spherical Specular Sheen (top-left glossy reflection of physical billiard ball)
+  tft.drawFastHLine(68, 38, 26, 0x2124);
+  tft.drawFastHLine(64, 40, 34, 0x3186);
+  tft.drawFastHLine(62, 42, 38, 0x4208);
+  tft.drawFastHLine(64, 44, 34, 0x3186);
+  tft.drawFastHLine(68, 46, 26, 0x2124);
 
-  tft.drawCircle(120, 110, 55, WHITE);
-  tft.drawCircle(120, 110, 51, GREY);
+  // Raised Circular Bezel Lip framing central fluid window (center 120, 120)
+  tft.drawCircle(120, 120, 80, 0x18E3); // Outer dark bezel ring
+  tft.drawCircle(120, 120, 79, 0x2965); // Charcoal bezel edge
+  tft.drawCircle(120, 120, 78, 0x39E7); // Highlight metallic ring
+  tft.drawCircle(120, 120, 77, 0x10A2); // Bezel inner groove
+  tft.drawCircle(120, 120, 76, 0x0841); // Shadow inside bezel
 
-  centerText(
-    "8",
-    119,
-    &FreeSansBold12pt7b,
-    WHITE
-  );
+  // Murky Dark Blue Fluid Reservoir
+  tft.fillCircle(120, 120, 75, 0x0027); // Deep indigo fluid (RGB ~ 0, 4, 39)
+  tft.drawCircle(120, 120, 75, 0x0012); // Deep liquid shadow edge
+  tft.drawCircle(120, 120, 74, 0x001B);
+}
 
-  tft.fillRoundRect(
-    61, 153,
-    118, 32,
-    8,
-    BLUE
-  );
+void drawInvertedTriangle(int offsetY = 0, uint16_t faceColor = 0x09F4) {
+  // Iconic Inverted Triangle Die Face pointing DOWN
+  // Vertices: Top-Left (64, 70), Top-Right (176, 70), Bottom Apex (120, 168)
+  int y0 = 70 + offsetY;
+  int yApex = 168 + offsetY;
 
-  centerText(
-    "PRESS SELECT",
-    174,
-    &FreeSans9pt7b,
-    WHITE
-  );
+  // Solid die face
+  tft.fillTriangle(64, y0, 176, y0, 120, yApex, faceColor);
+
+  // 3D Bevel Highlights & Shading:
+  // Top edge (light from above): bright cyan-blue highlight
+  tft.drawLine(64, y0, 176, y0, 0x5DDF);
+  tft.drawLine(66, y0 + 1, 174, y0 + 1, 0x247A);
+
+  // Left bevel: medium cyan-blue edge
+  tft.drawLine(64, y0, 120, yApex, 0x1CF8);
+
+  // Right bevel: deep navy shadow edge
+  tft.drawLine(176, y0, 120, yApex, 0x0188);
+
+  // Subtle ambient liquid glow outline
+  tft.drawTriangle(63, y0 - 1, 177, y0 - 1, 120, yApex + 1, 0x0258);
+}
+
+void drawAnswerLine(const char* text, int y, int maxAllowedWidth) {
+  if (!text || strlen(text) == 0) return;
+
+  tft.setFont(&FreeSans9pt7b);
+  int16_t x1, y1;
+  uint16_t w, h;
+  tft.getTextBounds(text, 0, y, &x1, &y1, &w, &h);
+
+  if (w <= maxAllowedWidth) {
+    tft.setTextColor(WHITE);
+    tft.setCursor((SCREEN_W - w) / 2, y);
+    tft.print(text);
+  } else {
+    // Crisp bitmap font guarantees zero clipping for longer phrases
+    tft.setFont(NULL);
+    tft.setTextSize(1);
+    tft.setTextColor(WHITE);
+    int bw = strlen(text) * 6;
+    tft.setCursor((SCREEN_W - bw) / 2, y - 5);
+    tft.print(text);
+  }
+}
+
+void drawMagicScreen() {
+  drawMagic8BallBase();
+  drawInvertedTriangle();
+
+  // Initial prompt inside the inverted blue triangle
+  drawAnswerLine("ASK A", 102, 76);
+  drawAnswerLine("QUESTION", 122, 54);
+
+  // Top Title
+  centerText("MAGIC 8 BALL", 34, &FreeSansBold9pt7b, CYAN);
+
+  // Bottom action prompt
+  centerText("PRESS SELECT", 214, &FreeSans9pt7b, WHITE);
 }
 
 // ======================================
@@ -1045,126 +1236,82 @@ void drawMagicScreen() {
 // ======================================
 
 void thinkingAnimation() {
+  // Clear bottom prompt
+  tft.fillRect(30, 202, 180, 24, BG);
+  centerText("THINKING...", 214, &FreeSans9pt7b, CYAN);
 
-  for (int i = 0; i < 4; i++) {
+  // Frame 1: Fluid ripples, die starts sinking into murky liquid
+  tft.fillCircle(120, 120, 75, 0x0027);
+  tft.fillTriangle(66, 76, 174, 76, 120, 172, 0x0150); // Sinking dimmer die
+  tft.drawCircle(120, 120, 42, 0x00AB);
+  tft.drawCircle(120, 120, 62, 0x0067);
+  delay(160);
 
-    tft.fillScreen(BG);
+  // Frame 2: Murky swirl, die obscured, bubbles emerge
+  tft.fillCircle(120, 120, 75, 0x001B); // Darker swirling fluid
+  tft.drawCircle(120, 120, 26, 0x012F);
+  tft.drawCircle(120, 120, 52, 0x00EB);
+  tft.fillCircle(106, 96, 3, 0x037F);
+  tft.fillCircle(136, 112, 4, 0x037F);
+  tft.fillCircle(114, 136, 2, 0x021B);
+  delay(170);
 
-    tft.drawCircle(120, 108, 55, CYAN);
-    tft.drawCircle(120, 108, 43, BLUE);
+  // Frame 3: Bubbles float up, die rises back to surface
+  tft.fillCircle(120, 120, 75, 0x0027);
+  tft.fillTriangle(65, 73, 175, 73, 120, 170, 0x0492); // Emerging die
+  tft.drawCircle(120, 120, 36, 0x016E);
+  tft.fillCircle(108, 86, 3, 0x04BF);
+  tft.fillCircle(132, 98, 3, 0x04BF);
+  delay(160);
 
-    centerText(
-      "8",
-      117,
-      &FreeSansBold12pt7b,
-      WHITE
-    );
-
-    centerText(
-      "THINKING...",
-      175,
-      &FreeSans9pt7b,
-      CYAN
-    );
-
-    delay(220);
-  }
+  // Frame 4: Die breaches surface, settling into position
+  drawMagic8BallBase();
+  drawInvertedTriangle();
+  delay(80);
 }
 
 // ======================================
 // MAGIC 8 BALL ANSWER
 // ======================================
 
+void showAnswer(int index) {
+  if (index < 0 || index >= ANSWER_COUNT) index = 0;
+
+  drawMagic8BallBase();
+  drawInvertedTriangle();
+
+  const MagicAnswer& ans = MAGIC_ANSWERS[index];
+
+  if (ans.line2 == nullptr && ans.line3 == nullptr) {
+    // 1-line answer
+    drawAnswerLine(ans.line1, 108, 70);
+  } else if (ans.line3 == nullptr) {
+    // 2-line answer
+    drawAnswerLine(ans.line1, 100, 78);
+    drawAnswerLine(ans.line2, 120, 56);
+  } else {
+    // 3-line answer
+    drawAnswerLine(ans.line1, 94, 84);
+    drawAnswerLine(ans.line2, 112, 64);
+    drawAnswerLine(ans.line3, 130, 44);
+  }
+
+  // Top subtle title
+  centerText("MAGIC 8 BALL", 34, &FreeSansBold9pt7b, CYAN);
+
+  // Action hint below viewing window
+  centerText("SELECT: ASK AGAIN", 214, &FreeSans9pt7b, CYAN);
+}
+
 void showAnswer(const char* answer) {
-
-  tft.fillScreen(BG);
-
-  tft.drawCircle(120, 108, 63, CYAN);
-  tft.drawCircle(120, 108, 57, BLUE);
-
-  tft.fillRoundRect(
-    48, 67,
-    144, 83,
-    10,
-    BLUE
-  );
-
-  String remaining = answer;
-  String line = "";
-
-  int y = 98;
-  int lines = 0;
-
-  while (
-    remaining.length() > 0 &&
-    lines < 3
-  ) {
-
-    int split = remaining.indexOf(' ');
-
-    String word;
-
-    if (split == -1) {
-      word = remaining;
-      remaining = "";
-    } else {
-      word = remaining.substring(0, split);
-      remaining = remaining.substring(split + 1);
-    }
-
-    String testLine =
-      line.length() == 0
-      ? word
-      : line + " " + word;
-
-    tft.setFont(&FreeSans9pt7b);
-
-    int16_t x1, y1;
-    uint16_t w, h;
-
-    tft.getTextBounds(
-      testLine.c_str(),
-      0, 0,
-      &x1, &y1,
-      &w, &h
-    );
-
-    if (w > 124 && line.length() > 0) {
-
-      centerText(
-        line.c_str(),
-        y,
-        &FreeSans9pt7b,
-        WHITE
-      );
-
-      y += 19;
-      lines++;
-
-      line = word;
-
-    } else {
-
-      line = testLine;
+  int found = 0;
+  for (int i = 0; i < ANSWER_COUNT; i++) {
+    if (strcmp(answers[i], answer) == 0) {
+      found = i;
+      break;
     }
   }
-
-  if (line.length() > 0 && lines < 3) {
-
-    centerText(
-      line.c_str(),
-      y,
-      &FreeSans9pt7b,
-      WHITE
-    );
-  }
-
-  centerText(
-    "SELECT: ASK AGAIN",
-    184,
-    &FreeSans9pt7b,
-    CYAN
-  );
+  showAnswer(found);
 }
 
 // ======================================
@@ -1398,6 +1545,7 @@ void setup() {
 
     // Check remote wallpaper for any cloud updates
     checkAndUpdateWallpaper(COSMO_WALLPAPER_URL, WALLPAPER_CACHE_PATH);
+    syncAppIcons();
   }
 
   lastInteraction = millis();
@@ -1466,6 +1614,7 @@ void loop() {
         drawHome();
         return;
       }
+      syncAppIcons();
     }
 
     if (selectPressed) {
@@ -1535,7 +1684,7 @@ void loop() {
 
       int index = random(ANSWER_COUNT);
 
-      showAnswer(answers[index]);
+      showAnswer(index);
 
       return;
     }
