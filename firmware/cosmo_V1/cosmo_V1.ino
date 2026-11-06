@@ -570,25 +570,20 @@ bool renderWallpaper() {
 }
 
 void drawClock() {
-  tft.fillRoundRect(42, 86, 156, 70, 10, 0x0842);
-  tft.drawRoundRect(42, 86, 156, 70, 10, 0x2104);
 
   struct tm timeInfo;
 
   if (getLocalTime(&timeInfo, 10)) {
     char timeString[8];
     strftime(timeString, sizeof(timeString), "%H:%M", &timeInfo);
-    centerText(timeString, 122, &FreeSansBold12pt7b, WHITE);
+    centerText(timeString, 146, &FreeSansBold9pt7b, WHITE);
 
     char dateString[20];
     strftime(dateString, sizeof(dateString), "%a, %b %d", &timeInfo);
     for (int i = 0; dateString[i]; i++) {
       dateString[i] = toupper((unsigned char)dateString[i]);
     }
-    centerText(dateString, 146, &FreeSans9pt7b, CYAN);
-  } else {
-    centerText("--:--", 122, &FreeSansBold12pt7b, GREY);
-    centerText("OFFLINE", 146, &FreeSans9pt7b, GREY);
+    centerText(dateString, 170, &FreeSans9pt7b, WHITE);
   }
 
   lastClockUpdate = millis();
@@ -633,13 +628,6 @@ void drawHome() {
     wallpaperLoaded = true;
   }
 
-  // Header pill with title
-  tft.fillRoundRect(65, 26, 110, 24, 6, 0x0842);
-  centerText(DEVICE_NAME, 43, &FreeSansBold12pt7b, CYAN);
-
-  // Subtitle banner underneath clock
-  tft.fillRoundRect(38, 172, 164, 22, 6, 0x0842);
-  centerText("YOUR LITTLE UNIVERSE", 187, &FreeSans9pt7b, GREY);
 
   drawClock();
 }
