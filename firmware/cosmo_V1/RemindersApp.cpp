@@ -4,7 +4,7 @@
 #include <HTTPClient.h>
 #include <LittleFS.h>
 
-extern const char* GITHUB_ROOT_CA;
+extern const char* RENDER_ROOT_CA;
 
 static const char* REMINDERS_CACHE_FILE = "/reminders.json";
 
@@ -233,13 +233,13 @@ void RemindersApp::runSyncTask() {
   }
 
   WiFiClientSecure client;
-  client.setCACert(GITHUB_ROOT_CA);
-  client.setTimeout(12);
+  client.setCACert(RENDER_ROOT_CA);
+  client.setTimeout(25);
 
   HTTPClient http;
   http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
-  http.setTimeout(15000);
-  http.setConnectTimeout(8000);
+  http.setTimeout(30000);
+  http.setConnectTimeout(15000);
   http.setUserAgent("COSMO-ESP32-Reminders");
   http.addHeader("Accept", "application/json");
   http.setReuse(false);
@@ -259,6 +259,15 @@ void RemindersApp::runSyncTask() {
 
   int httpCode = http.GET();
   Serial.printf("[REMINDERS] HTTP status code: %d\n", httpCode);
+
+  if (httpCode < 0) {
+    char sslErr[128] = {0};
+    client.lastError(sslErr, sizeof(sslErr));
+    Serial.printf("[REMINDERS] HTTP request failed with code %d (%s)\n",
+                  httpCode, http.errorToString(httpCode).c_str());
+    Serial.printf("[REMINDERS] TLS / Socket error detail: %s\n",
+                  (sslErr[0] ? sslErr : "No mbedTLS error reported"));
+  }
 
   ReminderEntry parsedItems[MAX_REMINDERS];
   int parsedCount = 0;
@@ -284,7 +293,8 @@ void RemindersApp::runSyncTask() {
     parsedState = REMINDERS_SYNC_UNAUTH;
     taskResult = SYNC_RES_UNAUTH;
   } else {
-    Serial.printf("[REMINDERS] HTTP request failed with code %d\n", httpCode);
+    Serial.printf("[REMINDERS] HTTP request returned error code %d (%s)\n",
+                  httpCode, http.errorToString(httpCode).c_str());
     http.end();
     client.stop();
     taskResult = SYNC_RES_FAIL;

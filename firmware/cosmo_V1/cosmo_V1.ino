@@ -140,6 +140,86 @@ const char* GITHUB_ROOT_CA =
 "yDFx8r7i9vIJU5HS3moZLkYWAOilMaV9N56A9Bgb6dNcHkvg3NoaYA==\n"
 "-----END CERTIFICATE-----\n";
 
+const char* RENDER_ROOT_CA =
+// GTS Root R4 (Google Trust Services Root 4 - Render Host)
+"-----BEGIN CERTIFICATE-----\n"
+"MIICCTCCAY6gAwIBAgINAgPlwGjvYxqccpBQUjAKBggqhkjOPQQDAzBHMQswCQYD\n"
+"VQQGEwJVUzEiMCAGA1UEChMZR29vZ2xlIFRydXN0IFNlcnZpY2VzIExMQzEUMBIG\n"
+"A1UEAxMLR1RTIFJvb3QgUjQwHhcNMTYwNjIyMDAwMDAwWhcNMzYwNjIyMDAwMDAw\n"
+"WjBHMQswCQYDVQQGEwJVUzEiMCAGA1UEChMZR29vZ2xlIFRydXN0IFNlcnZpY2Vz\n"
+"IExMQzEUMBIGA1UEAxMLR1RTIFJvb3QgUjQwdjAQBgcqhkjOPQIBBgUrgQQAIgNi\n"
+"AATzdHOnaItgrkO4NcWBMHtLSZ37wWHO5t5GvWvVYRg1rkDdc/eJkTBa6zzuhXyi\n"
+"QHY7qca4R9gq55KRanPpsXI5nymfopjTX15YhmUPoYRlBtHci8nHc8iMai/lxKvR\n"
+"HYqjQjBAMA4GA1UdDwEB/wQEAwIBhjAPBgNVHRMBAf8EBTADAQH/MB0GA1UdDgQW\n"
+"BBSATNbrdP9JNqPV2Py1PsVq8JQdjDAKBggqhkjOPQQDAwNpADBmAjEA6ED/g94D\n"
+"9J+uHXqnLrmvT/aDHQ4thQEd0dlq7A/Cr8deVl5c1RxYIigL9zC2L7F8AjEA8GE8\n"
+"p/SgguMh1YQdc4acLa/KNJvxn7kjNuK8YAOdgLOaVsjh4rsUecrNIdSUtUlD\n"
+"-----END CERTIFICATE-----\n"
+// GTS Root R1 (Google Trust Services Root 1)
+"-----BEGIN CERTIFICATE-----\n"
+"MIIFVzCCAz+gAwIBAgINAgPlk28xsBNJiGuiFzANBgkqhkiG9w0BAQwFADBHMQsw\n"
+"CQYDVQQGEwJVUzEiMCAGA1UEChMZR29vZ2xlIFRydXN0IFNlcnZpY2VzIExMQzEU\n"
+"MBIGA1UEAxMLR1RTIFJvb3QgUjEwHhcNMTYwNjIyMDAwMDAwWhcNMzYwNjIyMDAw\n"
+"MDAwWjBHMQswCQYDVQQGEwJVUzEiMCAGA1UEChMZR29vZ2xlIFRydXN0IFNlcnZp\n"
+"Y2VzIExMQzEUMBIGA1UEAxMLR1RTIFJvb3QgUjEwggIiMA0GCSqGSIb3DQEBAQUA\n"
+"A4ICDwAwggIKAoICAQC2EQKLHuOhd5s73L+UPreVp0A8of2C+X0yBoJx9vaMf/vo\n"
+"27xqLpeXo4xL+Sv2sfnOhB2x+cWX3u+58qPpvBKJXqeqUqv4IyfLpLGcY9vXmX7w\n"
+"Cl7raKb0xlpHDU0QM+NOsROjyBhsS+z8CZDfnWQpJSMHobTSPS5g4M/SCYe7zUjw\n"
+"TcLCeoiKu7rPWRnWr4+wB7CeMfGCwcDfLqZtbBkOtdh+JhpFAz2weaSUKK0Pfybl\n"
+"qAj+lug8aJRT7oM6iCsVlgmy4HqMLnXWnOunVmSPlk9orj2XwoSPwLxAwAtcvfaH\n"
+"szVsrBhQf4TgTM2S0yDpM7xSma8ytSmzJSq0SPly4cpk9+aCEI3oncKKiPo4Zor8\n"
+"Y/kB+Xj9e1x3+naH+uzfsQ55lVe0vSbv1gHR6xYKu44LtcXFilWr06zqkUspzBmk\n"
+"MiVOKvFlRNACzqrOSbTqn3yDsEB750Orp2yjj32JgfpMpf/VjsPOS+C12LOORc92\n"
+"wO1AK/1TD7Cn1TsNsYqiA94xrcx36m97PtbfkSIS5r762DL8EGMUUXLeXdYWk70p\n"
+"aDPvOmbsB4om3xPXV2V4J95eSRQAogB/mqghtqmxlbCluQ0WEdrHbEg8QOB+DVrN\n"
+"VjzRlwW5y0vtOUucxD/SVRNuJLDWcfr0wbrM7Rv1/oFB2ACYPTrIrnqYNxgFlQID\n"
+"AQABo0IwQDAOBgNVHQ8BAf8EBAMCAYYwDwYDVR0TAQH/BAUwAwEB/zAdBgNVHQ4E\n"
+"FgQU5K8rJnEaK0gnhS9SZizv8IkTcT4wDQYJKoZIhvcNAQEMBQADggIBAJ+qQibb\n"
+"C5u+/x6Wki4+omVKapi6Ist9wTrYggoGxval3sBOh2Z5ofmmWJyq+bXmYOfg6LEe\n"
+"QkEzCzc9zolwFcq1JKjPa7XSQCGYzyI0zzvFIoTgxQ6KfF2I5DUkzps+GlQebtuy\n"
+"h6f88/qBVRRiClmpIgUxPoLW7ttXNLwzldMXG+gnoot7TiYaelpkttGsN/H9oPM4\n"
+"7HLwEXWdyzRSjeZ2axfG34arJ45JK3VmgRAhpuo+9K4l/3wV3s6MJT/KYnAK9y8J\n"
+"ZgfIPxz88NtFMN9iiMG1D53Dn0reWVlHxYciNuaCp+0KueIHoI17eko8cdLiA6Ef\n"
+"MgfdG+RCzgwARWGAtQsgWSl4vflVy2PFPEz0tv/bal8xa5meLMFrUKTX5hgUvYU/\n"
+"Z6tGn6D/Qqc6f1zLXbBwHSs09dR2CQzreExZBfMzQsNhFRAbd03OIozUhfJFfbdT\n"
+"6u9AWpQKXCBfTkBdYiJ23//OYb2MI3jSNwLgjt7RETeJ9r/tSQdirpLsQBqvFAnZ\n"
+"0E6yove+7u7Y/9waLd64NnHi/Hm3lCXRSHNboTXns5lndcEZOitHTtNCjv0xyBZm\n"
+"2tIMPNuzjsmhDYAPexZ3FL//2wmUspO8IFgV6dtxQ/PeEMMA3KgqlbbC1j+Qa3bb\n"
+"bP6MvPJwNQzcmRk13NfIRmPVNnGuV/u3gm3c\n"
+"-----END CERTIFICATE-----\n"
+// ISRG Root X1 (Let's Encrypt Root)
+"-----BEGIN CERTIFICATE-----\n"
+"MIIFazCCA1OgAwIBAgIRAIIQz7DSQONZRGPgu2OCiwAwDQYJKoZIhvcNAQELBQAw\n"
+"TzELMAkGA1UEBhMCVVMxKTAnBgNVBAoTIEludGVybmV0IFNlY3VyaXR5IFJlc2Vh\n"
+"cmNoIEdyb3VwMRUwEwYDVQQDEwxJU1JHIFJvb3QgWDEwHhcNMTUwNjA0MTEwNDM4\n"
+"WhcNMzUwNjA0MTEwNDM4WjBPMQswCQYDVQQGEwJVUzEpMCcGA1UEChMHSW50ZXJu\n"
+"ZXQgU2VjdXJpdHkgUmVzZWFyY2ggR3JvdXAxFTATBgNVBAMTDElTUkcgUm9vdCBY\n"
+"MTCCAiIwDQYJKoZIhvcNAQEBBQADggIPADCCAgoCggIBAK3oJHP0FDfzm54rVygc\n"
+"h77ct984kIxuPOZXoHj3dcKi/vVqbvYATyjb3miGbESTtrFj/RQSa78f0uoxmyF+\n"
+"0TM8ukj13Xnfs7j/EvEhmkvBioZxaUpmZmyPfjxwv60pIgbz5MDmgK7iS4+3mX6U\n"
+"A5/TR5d8mUgjU+g4rk8Kb4Mu0UlXjIB0ttov0DiNewNwIRt18jA8+o+u3dpjq+sW\n"
+"T8KOEUt+zwvo/7V3LvSye0rgTBIlDHCNAymg4VMk7BPZ7hm/ELNKjD+Jo2FR3qyH\n"
+"B5T0Y3HsLuJvW5iB4YlcNHlsdu87kGJ55tukmi8mxdAQ4Q7e2RCOFvu396j3x+UC\n"
+"B5iPNgiV5+I3lg02dZ77DnKxHZu8A/lJBdiB3QW0KtZB6awBdpUKD9jf1b0SHzUv\n"
+"KBds0pjBqAlkd25HN7rOrFleaJ1/ctaJxQZBKT5ZPt0m9STJEadao0xAH0ahmbWn\n"
+"OlFuhjuefXKnEgV4We0+UXgVCwOPjdAvBbI+e0ocS3MFEvzG6uBQE3xDk3SzynTn\n"
+"jh8BCNAw1FtxNrQHusEwMFxIt4I7mKZ9YIqioymCzLq9gwQbooMDQaHWBfEbwrbw\n"
+"qHyGO0aoSCqI3Haadr8faqU9GY/rOPNk3sgrDQoo//fb4hVC1CLQJ13hef4Y53CI\n"
+"rU7m2Ys6xt0nUW7/vGT1M0NPAgMBAAGjQjBAMA4GA1UdDwEB/wQEAwIBBjAPBgNV\n"
+"HRMBAf8EBTADAQH/MB0GA1UdDgQWBBR5tFnme7bl5AFzgAiIyBpY9umbbjANBgkq\n"
+"hkiG9w0BAQsFAAOCAgEAVR9YqbyyqFDQDLHYGmkgJykIrGF1XIpu+ILlaS/V9lZL\n"
+"ubhzEFnTIZd+50xx+7LSYK05qAvqFyFWhfFQDlnrzuBZ6brJFe+GnY+EgPbk6ZGQ\n"
+"3BebYhtF8GaV0nxvwuo77x/Py9auJ/GpsMiu/X1+mvoiBOv/2X/qkSsisRcOj/KK\n"
+"NFtY2PwByVS5uCbMiogziUwthDyC3+6WVwW6LLv3xLfHTjuCvjHIInNzktHCgKQ5\n"
+"ORAzI4JMPJ+GslWYHb4phowim57iaztXOoJwTdwJx4nLCgdNbOhdjsnvzqvHu7Ur\n"
+"TkXWStAmzOVyyghqpZXjFaH3pO3JLF+l+/+sKAIuvtd7u+Nxe5AW0wdeRlN8NwdC\n"
+"jNPElpzVmbUq4JUagEiuTDkHzsxHpFKVK7q4+63SM1N95R1NbdWhscdCb+ZAJzVc\n"
+"oyi3B43njTOQ5yOf+1CceWxG1bQVs5ZufpsMljq4Ui0/1lvh+wjChP4kqKOJ2qxq\n"
+"4RgqsahDYVvTH9w7jXbyLeiNdd8XM2w9U/t7y0Ff/9yi0GE44Za4rF2LN9d11TPA\n"
+"mRGunUHBcnWEvgJBQl9nJEiU0Zsnvgc/ubhPgXRR4Xq37Z0j4r7g1SgEEzwxA57d\n"
+"emyPxgcYxn/eR44/KJ4EBs+lVDR3veyJm+kXQ99b21/+jh5Xos1AnX5iItreGCc=\n"
+"-----END CERTIFICATE-----\n";
+
 bool tjpgOutput(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t* bitmap) {
   tjpgCallbackCount++;
   if (y >= SCREEN_H) return 0;
@@ -777,21 +857,21 @@ uint16_t dimColor(uint16_t color, float brightness) {
 // ======================================
 
 const char* iconFileNames[APP_COUNT] = {
-  "icon_8ball.jpg",
-  "icon_chess.jpg",
-  "icon_snake.jpg",
-  "icon_tetris.jpg",
-  "icon_simon.jpg",
-  "icon_reminders.jpg"
+  "8ball_pix.jpg",
+  "chess_pix.jpg",
+  "snake_pix.jpg",
+  "tetris_pix.jpg",
+  "simon_pix.jpg",
+  "reminders_pix.jpg"
 };
 
 const char* iconCachePaths[APP_COUNT] = {
-  "/icon_8ball.jpg",
-  "/icon_chess.jpg",
-  "/icon_snake.jpg",
-  "/icon_tetris.jpg",
-  "/icon_simon.jpg",
-  "/icon_reminders.jpg"
+  "/icon_8ball_pix.jpg",
+  "/icon_chess_pix.jpg",
+  "/icon_snake_pix.jpg",
+  "/icon_tetris_pix.jpg",
+  "/icon_simon_pix.jpg",
+  "/icon_reminders_pix.jpg"
 };
 
 static uint16_t* s_iconRawBuf = nullptr;
@@ -800,6 +880,23 @@ static uint32_t s_iconCallbackCount = 0;
 
 void auditIconCache() {
   Serial.println("[STORAGE] ================= ICON CACHE AUDIT =================");
+
+  // Clean up obsolete legacy cache files if present to reclaim LittleFS space
+  const char* legacyPaths[APP_COUNT] = {
+    "/icon_8ball.jpg",
+    "/icon_chess.jpg",
+    "/icon_snake.jpg",
+    "/icon_tetris.jpg",
+    "/icon_simon.jpg",
+    "/icon_reminders.jpg"
+  };
+  for (int i = 0; i < APP_COUNT; i++) {
+    if (LittleFS.exists(legacyPaths[i])) {
+      Serial.printf("[STORAGE] Removing obsolete legacy icon cache: %s\n", legacyPaths[i]);
+      LittleFS.remove(legacyPaths[i]);
+    }
+  }
+
   for (int i = 0; i < APP_COUNT; i++) {
     const char* path = iconCachePaths[i];
     if (!LittleFS.exists(path)) {
@@ -1088,8 +1185,8 @@ bool syncAppIcons() {
     return false;
   }
 
-  // 2. Test one connection first: icon_8ball.jpg (App 0)
-  Serial.println("[ICON-SYNC] STEP 1: Probing single test connection on icon_8ball.jpg (App 0)...");
+  // 2. Test one connection first: icon 0
+  Serial.printf("[ICON-SYNC] STEP 1: Probing single test connection on %s (App 0)...\n", iconFileNames[0]);
   bool testSuccess = false;
 
   bool icon0AlreadyValid = false;
@@ -1108,16 +1205,16 @@ bool syncAppIcons() {
   }
 
   if (icon0AlreadyValid) {
-    Serial.println("[ICON-SYNC] icon_8ball.jpg is already cached and valid in LittleFS.");
+    Serial.printf("[ICON-SYNC] %s is already cached and valid in LittleFS.\n", iconFileNames[0]);
     testSuccess = true;
   } else {
     testSuccess = downloadIcon(0);
     if (!testSuccess) {
-      Serial.println("[ICON-SYNC] SINGLE TEST CONNECTION FAILED on icon_8ball.jpg!");
+      Serial.printf("[ICON-SYNC] SINGLE TEST CONNECTION FAILED on %s!\n", iconFileNames[0]);
       Serial.println("[ICON-SYNC] Halting download sequence to prevent resource exhaustion. Will retry later.");
       return false;
     }
-    Serial.println("[ICON-SYNC] SINGLE TEST CONNECTION SUCCEEDED on icon_8ball.jpg!");
+    Serial.printf("[ICON-SYNC] SINGLE TEST CONNECTION SUCCEEDED on %s!\n", iconFileNames[0]);
   }
 
   // 3. Close connection cleanly, wait briefly, then proceed with remaining five icons sequentially
@@ -1192,15 +1289,23 @@ void drawAppIcon(
     // If not already in raw buffer for this index, decode once from LittleFS
     if (s_cachedRawIndex != index) {
       s_iconCallbackCount = 0;
-      TJpgDec.setJpgScale(1);
-      TJpgDec.setSwapBytes(false);
-      TJpgDec.setCallback(tjpgIconDecodeCallback);
-      decRes = TJpgDec.drawFsJpg(0, 0, cachePath, LittleFS);
-      cbCount = s_iconCallbackCount;
-      if (decRes == JDR_OK && cbCount > 0) {
-        s_cachedRawIndex = index;
+      uint16_t jpgW = 0, jpgH = 0;
+      JRESULT szRes = TJpgDec.getFsJpgSize(&jpgW, &jpgH, cachePath, LittleFS);
+      if (szRes != JDR_OK || jpgW != 80 || jpgH != 80) {
+        failReason = (szRes != JDR_OK) ? "Failed to read JPEG dimensions" : "Invalid dimensions (must be 80x80)";
+        Serial.printf("[ICON-RENDER] App [%d] %s: dimension check failed (%ux%u, res=%d)\n",
+                      index, appNames[index], jpgW, jpgH, (int)szRes);
       } else {
-        failReason = (decRes != JDR_OK) ? "TJpgDec decode error" : "Zero callbacks";
+        TJpgDec.setJpgScale(1);
+        TJpgDec.setSwapBytes(false);
+        TJpgDec.setCallback(tjpgIconDecodeCallback);
+        decRes = TJpgDec.drawFsJpg(0, 0, cachePath, LittleFS);
+        cbCount = s_iconCallbackCount;
+        if (decRes == JDR_OK && cbCount > 0) {
+          s_cachedRawIndex = index;
+        } else {
+          failReason = (decRes != JDR_OK) ? "TJpgDec decode error" : "Zero callbacks";
+        }
       }
     }
 
