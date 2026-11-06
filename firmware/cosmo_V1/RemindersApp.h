@@ -8,6 +8,7 @@
 #include <Fonts/FreeSansBold9pt7b.h>
 #include <Fonts/FreeSansBold12pt7b.h>
 #include <time.h>
+#include <ArduinoJson.h>
 
 #define MAX_REMINDERS 16
 
@@ -18,9 +19,9 @@ enum ReminderKind {
 
 struct ReminderEntry {
   ReminderKind kind;
-  char title[48];
-  char timeOrDue[24];
-  char listOrCal[24];
+  char title[64];
+  char timeOrDue[32];
+  char listOrCal[32];
   bool completed;
   bool overdue;
   bool allDay;
@@ -39,6 +40,13 @@ enum RemindersViewMode {
   REMINDERS_VIEW_DETAIL
 };
 
+enum SyncTaskResult {
+  SYNC_RES_NONE,
+  SYNC_RES_OK,
+  SYNC_RES_UNAUTH,
+  SYNC_RES_FAIL
+};
+
 class RemindersApp {
 public:
   RemindersApp(Adafruit_GC9A01A& display);
@@ -55,6 +63,7 @@ public:
   bool isActive() const;
   bool wantsToExit() const;
   void resetExit();
+  bool isSyncing() const { return syncing; }
 
 private:
   Adafruit_GC9A01A& tft;
@@ -71,8 +80,22 @@ private:
   time_t lastSyncTimestamp;
   char statusMessage[64];
   bool exitRequested;
+  bool active;
   bool initialized;
   bool needsRedraw;
+
+  // Background non-blocking synchronization
+  volatile bool syncing;
+  volatile bool syncDone;
+  SyncTaskResult stagingResult;
+  ReminderEntry stagingItems[MAX_REMINDERS];
+  int stagingCount;
+  RemindersSyncState stagingSyncState;
+  String stagingPayload;
+  TaskHandle_t syncTaskHandle;
+
+  static void syncTaskTrampoline(void* param);
+  void runSyncTask();
 
   void render();
   void renderCardView();
@@ -80,10 +103,9 @@ private:
   void renderEmptyState();
   void renderUnauthState();
 
-  void parseRemindersJson(const String& json);
+  bool parseRemindersJson(const String& json, ReminderEntry* targetItems, int& targetCount, RemindersSyncState& targetState);
   void centerString(const char* text, int y, const GFXfont* font, uint16_t color);
   void drawBadge(int x, int y, int w, int h, const char* label, uint16_t bgColor, uint16_t textColor);
-  void extractJsonField(const String& json, const String& key, char* dest, size_t destSize);
 };
 
 #endif // REMINDERS_APP_H

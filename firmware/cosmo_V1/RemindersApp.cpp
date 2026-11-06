@@ -1,7 +1,10 @@
 #include "RemindersApp.h"
 #include <WiFi.h>
+#include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 #include <LittleFS.h>
+
+extern const char* GITHUB_ROOT_CA;
 
 static const char* REMINDERS_CACHE_FILE = "/reminders.json";
 
@@ -28,11 +31,19 @@ RemindersApp::RemindersApp(Adafruit_GC9A01A& display)
     lastSyncAttempt(0),
     lastSyncTimestamp(0),
     exitRequested(false),
+    active(false),
     initialized(false),
-    needsRedraw(true) {
+    needsRedraw(true),
+    syncing(false),
+    syncDone(false),
+    stagingResult(SYNC_RES_NONE),
+    stagingCount(0),
+    stagingSyncState(REMINDERS_SYNC_NEVER),
+    syncTaskHandle(NULL) {
   memset(items, 0, sizeof(items));
+  memset(stagingItems, 0, sizeof(stagingItems));
   snprintf(statusMessage, sizeof(statusMessage), "Initializing...");
-  strncpy(backendUrl, "http://192.168.1.100:3000/api/google/reminders", sizeof(backendUrl) - 1);
+  strncpy(backendUrl, "https://cosmo-pcju.onrender.com/api/google/reminders", sizeof(backendUrl) - 1);
   backendUrl[sizeof(backendUrl) - 1] = '\0';
 }
 
@@ -45,6 +56,7 @@ void RemindersApp::setBackendUrl(const char* url) {
 
 void RemindersApp::init() {
   exitRequested = false;
+  active = true;
   viewMode = REMINDERS_VIEW_CARD;
   currentIndex = 0;
   initialized = true;
@@ -52,16 +64,17 @@ void RemindersApp::init() {
   // Always load from cache first for instant offline readiness
   loadCachedFeed();
 
-  // If Wi-Fi is active and never synced or cache older than 10 mins, attempt fresh sync
+  // Initial immediate render of cached or empty state
+  render();
+
+  // If Wi-Fi is active and never synced or cache older than 10 mins, attempt fresh background sync
   if (WiFi.status() == WL_CONNECTED && (syncState == REMINDERS_SYNC_NEVER || millis() - lastSyncAttempt >= 600000)) {
     syncFeed();
   }
-
-  render();
 }
 
 bool RemindersApp::isActive() const {
-  return initialized && !exitRequested;
+  return active && !exitRequested;
 }
 
 bool RemindersApp::wantsToExit() const {
@@ -70,12 +83,52 @@ bool RemindersApp::wantsToExit() const {
 
 void RemindersApp::resetExit() {
   exitRequested = false;
+  active = false;
 }
 
 void RemindersApp::maintain(bool wifiConnected) {
+  // Handle completion of background sync task safely on main thread
+  if (syncDone) {
+    syncDone = false;
+    Serial.printf("[REMINDERS] Background sync completed with result code: %d\n", (int)stagingResult);
+
+    if (stagingResult == SYNC_RES_OK) {
+      saveCachedFeed(stagingPayload);
+      memcpy(items, stagingItems, sizeof(items));
+      itemCount = stagingCount;
+      if (currentIndex >= itemCount) currentIndex = 0;
+      syncState = REMINDERS_SYNC_OK_LIVE;
+      lastSyncTimestamp = time(nullptr);
+      snprintf(statusMessage, sizeof(statusMessage), "Live Sync OK");
+      needsRedraw = true;
+    } else if (stagingResult == SYNC_RES_UNAUTH) {
+      syncState = REMINDERS_SYNC_UNAUTH;
+      snprintf(statusMessage, sizeof(statusMessage), "Google account not linked");
+      needsRedraw = true;
+    } else if (stagingResult == SYNC_RES_FAIL) {
+      if (itemCount == 0) {
+        loadCachedFeed();
+      }
+      if (itemCount > 0) {
+        syncState = REMINDERS_SYNC_OK_CACHED;
+        snprintf(statusMessage, sizeof(statusMessage), "Sync failed (cached)");
+      } else {
+        syncState = REMINDERS_SYNC_FAILED;
+        snprintf(statusMessage, sizeof(statusMessage), "Sync failed");
+      }
+      needsRedraw = true;
+    }
+  }
+
+  // Redraw if Reminders screen is active on display and needs update
+  if (active && needsRedraw) {
+    needsRedraw = false;
+    render();
+  }
+
+  // Periodic 10-minute background sync
   unsigned long now = millis();
-  // 10 minute background sync interval
-  if (wifiConnected && (lastSyncAttempt == 0 || now - lastSyncAttempt >= 600000)) {
+  if (wifiConnected && !syncing && (lastSyncAttempt == 0 || now - lastSyncAttempt >= 600000)) {
     syncFeed();
   }
 }
@@ -95,16 +148,94 @@ void RemindersApp::update(bool left, bool right, bool select) {
     if (itemCount > 0) {
       viewMode = (viewMode == REMINDERS_VIEW_CARD ? REMINDERS_VIEW_DETAIL : REMINDERS_VIEW_CARD);
       render();
-    } else if (syncState == REMINDERS_SYNC_FAILED || syncState == REMINDERS_SYNC_NEVER) {
-      // Retry sync on select if empty or failed
-      if (WiFi.status() == WL_CONNECTED) {
-        tft.fillScreen(REM_BG);
-        centerString("SYNCING...", 120, &FreeSansBold9pt7b, REM_YELLOW);
+    } else if (syncState == REMINDERS_SYNC_FAILED || syncState == REMINDERS_SYNC_NEVER || syncState == REMINDERS_SYNC_UNAUTH) {
+      // Retry sync on select if empty, unauthenticated, or failed
+      if (WiFi.status() == WL_CONNECTED && !syncing) {
         syncFeed(true);
         render();
       }
     }
   }
+}
+
+void RemindersApp::syncTaskTrampoline(void* param) {
+  RemindersApp* self = static_cast<RemindersApp*>(param);
+  if (self) {
+    self->runSyncTask();
+  }
+}
+
+void RemindersApp::runSyncTask() {
+  Serial.printf("[REMINDERS] Non-blocking background sync starting: %s\n", backendUrl);
+
+  WiFiClientSecure client;
+  time_t now = time(nullptr);
+  if (now >= 1700000000) {
+    client.setCACert(GITHUB_ROOT_CA);
+  } else {
+    client.setInsecure();
+  }
+  client.setTimeout(12);
+
+  HTTPClient http;
+  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+  http.setTimeout(15000);
+  http.setConnectTimeout(8000);
+  http.setUserAgent("COSMO-ESP32-Reminders");
+  http.addHeader("Accept", "application/json");
+  http.setReuse(false);
+
+  if (!http.begin(client, backendUrl)) {
+    Serial.println("[REMINDERS] ERROR: HTTPClient.begin failed!");
+    client.stop();
+    stagingResult = SYNC_RES_FAIL;
+    syncing = false;
+    syncDone = true;
+    syncTaskHandle = NULL;
+    vTaskDelete(NULL);
+    return;
+  }
+
+  int httpCode = http.GET();
+  Serial.printf("[REMINDERS] HTTP status code: %d\n", httpCode);
+
+  if (httpCode == HTTP_CODE_OK) {
+    String payload = http.getString();
+    http.end();
+    client.stop();
+
+    ReminderEntry parsedItems[MAX_REMINDERS];
+    int parsedCount = 0;
+    RemindersSyncState parsedState = REMINDERS_SYNC_FAILED;
+
+    if (parseRemindersJson(payload, parsedItems, parsedCount, parsedState)) {
+      memcpy(stagingItems, parsedItems, sizeof(stagingItems));
+      stagingCount = parsedCount;
+      stagingSyncState = parsedState;
+      stagingPayload = payload;
+      stagingResult = SYNC_RES_OK;
+    } else if (parsedState == REMINDERS_SYNC_UNAUTH) {
+      stagingSyncState = REMINDERS_SYNC_UNAUTH;
+      stagingResult = SYNC_RES_UNAUTH;
+    } else {
+      stagingResult = SYNC_RES_FAIL;
+    }
+  } else if (httpCode == HTTP_CODE_UNAUTHORIZED || httpCode == HTTP_CODE_FORBIDDEN) {
+    http.end();
+    client.stop();
+    stagingSyncState = REMINDERS_SYNC_UNAUTH;
+    stagingResult = SYNC_RES_UNAUTH;
+  } else {
+    Serial.printf("[REMINDERS] HTTP request failed with code %d\n", httpCode);
+    http.end();
+    client.stop();
+    stagingResult = SYNC_RES_FAIL;
+  }
+
+  syncing = false;
+  syncDone = true;
+  syncTaskHandle = NULL;
+  vTaskDelete(NULL);
 }
 
 bool RemindersApp::syncFeed(bool force) {
@@ -115,51 +246,30 @@ bool RemindersApp::syncFeed(bool force) {
     return false;
   }
 
+  if (syncing) {
+    Serial.println("[REMINDERS] Sync already in progress, skipping.");
+    return false;
+  }
+
   lastSyncAttempt = millis();
-  Serial.printf("[REMINDERS] Connecting to backend: %s\n", backendUrl);
+  syncing = true;
+  syncDone = false;
 
-  HTTPClient http;
-  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
-  http.setTimeout(6000);
-  http.setUserAgent("COSMO-ESP32-Reminders");
-  http.setReuse(false);
+  BaseType_t res = xTaskCreatePinnedToCore(
+    syncTaskTrampoline,
+    "remSyncTask",
+    8192,
+    this,
+    1,
+    &syncTaskHandle,
+    0
+  );
 
-  if (!http.begin(backendUrl)) {
-    Serial.println("[REMINDERS] ERROR: HTTPClient.begin failed!");
-    snprintf(statusMessage, sizeof(statusMessage), "Connection failed");
-    if (itemCount == 0) loadCachedFeed();
-    syncState = REMINDERS_SYNC_FAILED;
+  if (res != pdPASS) {
+    Serial.println("[REMINDERS] ERROR: Failed to create background sync task!");
+    syncing = false;
     return false;
   }
-
-  int httpCode = http.GET();
-  Serial.printf("[REMINDERS] HTTP status code: %d\n", httpCode);
-
-  if (httpCode != HTTP_CODE_OK) {
-    snprintf(statusMessage, sizeof(statusMessage), "HTTP Error: %d", httpCode);
-    http.end();
-    if (itemCount == 0) loadCachedFeed();
-    syncState = REMINDERS_SYNC_FAILED;
-    return false;
-  }
-
-  String payload = http.getString();
-  http.end();
-
-  if (payload.length() < 10) {
-    snprintf(statusMessage, sizeof(statusMessage), "Empty payload");
-    if (itemCount == 0) loadCachedFeed();
-    syncState = REMINDERS_SYNC_FAILED;
-    return false;
-  }
-
-  // Parse and cache
-  parseRemindersJson(payload);
-  saveCachedFeed(payload);
-
-  syncState = REMINDERS_SYNC_OK_LIVE;
-  lastSyncTimestamp = time(nullptr);
-  snprintf(statusMessage, sizeof(statusMessage), "Live Sync OK");
 
   return true;
 }
@@ -183,135 +293,120 @@ bool RemindersApp::loadCachedFeed() {
     return false;
   }
 
-  parseRemindersJson(payload);
-  syncState = REMINDERS_SYNC_OK_CACHED;
-  snprintf(statusMessage, sizeof(statusMessage), "Loaded from cache");
-  return true;
+  ReminderEntry parsedItems[MAX_REMINDERS];
+  int parsedCount = 0;
+  RemindersSyncState parsedState = REMINDERS_SYNC_FAILED;
+
+  if (parseRemindersJson(payload, parsedItems, parsedCount, parsedState)) {
+    memcpy(items, parsedItems, sizeof(items));
+    itemCount = parsedCount;
+    if (currentIndex >= itemCount) currentIndex = 0;
+    syncState = REMINDERS_SYNC_OK_CACHED;
+    snprintf(statusMessage, sizeof(statusMessage), "Loaded from cache");
+    return true;
+  }
+
+  return false;
 }
 
 bool RemindersApp::saveCachedFeed(const String& json) {
+  if (json.length() < 10) return false;
+
   File f = LittleFS.open(REMINDERS_CACHE_FILE, FILE_WRITE);
-  if (!f) return false;
+  if (!f) {
+    Serial.println("[REMINDERS] ERROR: Failed to open cache file for writing.");
+    return false;
+  }
   f.print(json);
   f.close();
+  Serial.printf("[REMINDERS] Successfully saved %u bytes to %s\n", (unsigned int)json.length(), REMINDERS_CACHE_FILE);
   return true;
 }
 
-void RemindersApp::extractJsonField(const String& json, const String& key, char* dest, size_t destSize) {
-  dest[0] = '\0';
-  String searchKey = "\"" + key + "\":\"";
-  int startIdx = json.indexOf(searchKey);
-  if (startIdx == -1) {
-    // Try without quotes around value (e.g. boolean / number)
-    searchKey = "\"" + key + "\":";
-    startIdx = json.indexOf(searchKey);
-    if (startIdx == -1) return;
-    int valStart = startIdx + searchKey.length();
-    while (valStart < json.length() && (json[valStart] == ' ' || json[valStart] == '"')) valStart++;
-    int valEnd = valStart;
-    while (valEnd < json.length() && json[valEnd] != ',' && json[valEnd] != '}' && json[valEnd] != '"') valEnd++;
-    String val = json.substring(valStart, valEnd);
-    val.trim();
-    strncpy(dest, val.c_str(), destSize - 1);
-    dest[destSize - 1] = '\0';
-    return;
+bool RemindersApp::parseRemindersJson(
+  const String& json,
+  ReminderEntry* targetItems,
+  int& targetCount,
+  RemindersSyncState& targetState
+) {
+  targetCount = 0;
+
+  JsonDocument doc;
+  DeserializationError err = deserializeJson(doc, json);
+  if (err) {
+    Serial.printf("[REMINDERS] JSON parse error: %s\n", err.c_str());
+    targetState = REMINDERS_SYNC_FAILED;
+    return false;
   }
 
-  int valStart = startIdx + searchKey.length();
-  int valEnd = json.indexOf('"', valStart);
-  if (valEnd == -1) return;
-
-  String val = json.substring(valStart, valEnd);
-  // Unescape basic sequences
-  val.replace("\\\"", "\"");
-  val.replace("\\n", " ");
-  val.trim();
-
-  strncpy(dest, val.c_str(), destSize - 1);
-  dest[destSize - 1] = '\0';
-}
-
-void RemindersApp::parseRemindersJson(const String& json) {
-  itemCount = 0;
-  currentIndex = 0;
-
-  // Check status
-  char statusVal[32] = {0};
-  extractJsonField(json, "status", statusVal, sizeof(statusVal));
-
-  if (strcmp(statusVal, "unauthenticated") == 0) {
-    syncState = REMINDERS_SYNC_UNAUTH;
-    snprintf(statusMessage, sizeof(statusMessage), "Google account not linked");
-    return;
+  const char* status = doc["status"] | "";
+  if (strcmp(status, "unauthenticated") == 0) {
+    targetState = REMINDERS_SYNC_UNAUTH;
+    return false;
   }
 
-  // Parse Calendar Events array
-  int evArrStart = json.indexOf("\"events\":[");
-  if (evArrStart != -1) {
-    int evArrEnd = json.indexOf("]", evArrStart);
-    if (evArrEnd != -1) {
-      String evStr = json.substring(evArrStart + 9, evArrEnd);
-      int pos = 0;
-      while (pos < evStr.length() && itemCount < MAX_REMINDERS) {
-        int objStart = evStr.indexOf('{', pos);
-        if (objStart == -1) break;
-        int objEnd = evStr.indexOf('}', objStart);
-        if (objEnd == -1) break;
-
-        String itemObj = evStr.substring(objStart, objEnd + 1);
-        ReminderEntry& entry = items[itemCount];
-        entry.kind = REMINDER_KIND_EVENT;
-
-        extractJsonField(itemObj, "title", entry.title, sizeof(entry.title));
-        extractJsonField(itemObj, "time", entry.timeOrDue, sizeof(entry.timeOrDue));
-        snprintf(entry.listOrCal, sizeof(entry.listOrCal), "Calendar");
-
-        entry.completed = false;
-        entry.overdue = false;
-        entry.allDay = itemObj.indexOf("\"allDay\":true") != -1;
-
-        if (strlen(entry.title) > 0) {
-          itemCount++;
-        }
-        pos = objEnd + 1;
-      }
-    }
+  if (strcmp(status, "ok") != 0 && strcmp(status, "partial") != 0) {
+    Serial.printf("[REMINDERS] JSON status not ok/partial: %s\n", status);
+    targetState = REMINDERS_SYNC_FAILED;
+    return false;
   }
 
-  // Parse Tasks array
-  int tskArrStart = json.indexOf("\"tasks\":[");
-  if (tskArrStart != -1) {
-    int tskArrEnd = json.indexOf("]", tskArrStart);
-    if (tskArrEnd != -1) {
-      String tskStr = json.substring(tskArrStart + 8, tskArrEnd);
-      int pos = 0;
-      while (pos < tskStr.length() && itemCount < MAX_REMINDERS) {
-        int objStart = tskStr.indexOf('{', pos);
-        if (objStart == -1) break;
-        int objEnd = tskStr.indexOf('}', objStart);
-        if (objEnd == -1) break;
+  int count = 0;
 
-        String itemObj = tskStr.substring(objStart, objEnd + 1);
-        ReminderEntry& entry = items[itemCount];
-        entry.kind = REMINDER_KIND_TASK;
+  // Calendar Events
+  JsonArray events = doc["events"].as<JsonArray>();
+  for (JsonObject ev : events) {
+    if (count >= MAX_REMINDERS) break;
+    const char* title = ev["title"] | "";
+    if (strlen(title) == 0) continue;
 
-        extractJsonField(itemObj, "title", entry.title, sizeof(entry.title));
-        extractJsonField(itemObj, "dueFormatted", entry.timeOrDue, sizeof(entry.timeOrDue));
-        extractJsonField(itemObj, "listTitle", entry.listOrCal, sizeof(entry.listOrCal));
+    targetItems[count].kind = REMINDER_KIND_EVENT;
+    strncpy(targetItems[count].title, title, sizeof(targetItems[count].title) - 1);
+    targetItems[count].title[sizeof(targetItems[count].title) - 1] = '\0';
 
-        entry.completed = itemObj.indexOf("\"completed\":true") != -1;
-        entry.overdue = itemObj.indexOf("\"overdue\":true") != -1;
-        entry.allDay = false;
+    const char* t = ev["time"] | "";
+    strncpy(targetItems[count].timeOrDue, t, sizeof(targetItems[count].timeOrDue) - 1);
+    targetItems[count].timeOrDue[sizeof(targetItems[count].timeOrDue) - 1] = '\0';
 
-        if (strlen(entry.title) > 0) {
-          itemCount++;
-        }
-        pos = objEnd + 1;
-      }
-    }
+    strncpy(targetItems[count].listOrCal, "Calendar", sizeof(targetItems[count].listOrCal) - 1);
+    targetItems[count].listOrCal[sizeof(targetItems[count].listOrCal) - 1] = '\0';
+
+    targetItems[count].completed = false;
+    targetItems[count].overdue = false;
+    targetItems[count].allDay = ev["allDay"] | false;
+    count++;
   }
 
-  Serial.printf("[REMINDERS] Parsed %d reminder items (%s)\n", itemCount, statusVal);
+  // Google Tasks
+  JsonArray tasks = doc["tasks"].as<JsonArray>();
+  for (JsonObject tk : tasks) {
+    if (count >= MAX_REMINDERS) break;
+    const char* title = tk["title"] | "";
+    if (strlen(title) == 0) continue;
+
+    targetItems[count].kind = REMINDER_KIND_TASK;
+    strncpy(targetItems[count].title, title, sizeof(targetItems[count].title) - 1);
+    targetItems[count].title[sizeof(targetItems[count].title) - 1] = '\0';
+
+    const char* dueStr = tk["dueFormatted"] | tk["due"] | "";
+    strncpy(targetItems[count].timeOrDue, dueStr, sizeof(targetItems[count].timeOrDue) - 1);
+    targetItems[count].timeOrDue[sizeof(targetItems[count].timeOrDue) - 1] = '\0';
+
+    const char* lt = tk["listTitle"] | "Tasks";
+    strncpy(targetItems[count].listOrCal, lt, sizeof(targetItems[count].listOrCal) - 1);
+    targetItems[count].listOrCal[sizeof(targetItems[count].listOrCal) - 1] = '\0';
+
+    targetItems[count].completed = tk["completed"] | false;
+    targetItems[count].overdue = tk["overdue"] | false;
+    targetItems[count].allDay = false;
+    count++;
+  }
+
+  targetCount = count;
+  targetState = REMINDERS_SYNC_OK_LIVE;
+  Serial.printf("[REMINDERS] Parsed %d reminder items (status=%s, events=%u, tasks=%u)\n",
+                targetCount, status, (unsigned int)events.size(), (unsigned int)tasks.size());
+  return true;
 }
 
 void RemindersApp::centerString(const char* text, int y, const GFXfont* font, uint16_t color) {
@@ -353,7 +448,10 @@ void RemindersApp::render() {
   // Status indicator dot
   uint16_t statusDotColor = REM_GREY;
   const char* statusTxt = "OFFLINE";
-  if (syncState == REMINDERS_SYNC_OK_LIVE) {
+  if (syncing) {
+    statusDotColor = REM_YELLOW;
+    statusTxt = "SYNC";
+  } else if (syncState == REMINDERS_SYNC_OK_LIVE) {
     statusDotColor = REM_GREEN;
     statusTxt = "LIVE";
   } else if (syncState == REMINDERS_SYNC_OK_CACHED) {
@@ -466,19 +564,14 @@ void RemindersApp::renderCardView() {
       remaining = remaining.substring(split + 1);
     }
 
-    String testLine = (lines == 0 && word == item.title) ? word : "";
-    // Simple line width check
-    int16_t x1, y1;
-    uint16_t w, h;
-    tft.getTextBounds(word.c_str(), 0, y, &x1, &y1, &w, &h);
-
     tft.setCursor(34, y);
-    // Draw word/phrase cleanly
     tft.print(word);
     if (remaining.length() > 0 && lines < 2) {
       int nextSplit = remaining.indexOf(' ');
       String nextWord = (nextSplit == -1) ? remaining : remaining.substring(0, nextSplit);
       String combined = word + " " + nextWord;
+      int16_t x1, y1;
+      uint16_t w, h;
       tft.getTextBounds(combined.c_str(), 0, y, &x1, &y1, &w, &h);
       if (w < 168) {
         tft.print(" ");
@@ -567,15 +660,20 @@ void RemindersApp::renderEmptyState() {
   tft.drawFastHLine(100, 88, 40, REM_GREY);
   tft.drawFastHLine(100, 96, 40, REM_GREY);
 
-  centerString("ALL CAUGHT UP!", 128, &FreeSansBold9pt7b, REM_WHITE);
-  centerString("No pending reminders", 148, &FreeSans9pt7b, REM_GREY);
+  if (syncing) {
+    centerString("SYNCING...", 128, &FreeSansBold9pt7b, REM_YELLOW);
+    centerString("Fetching Google feed", 148, &FreeSans9pt7b, REM_GREY);
+  } else {
+    centerString("ALL CAUGHT UP!", 128, &FreeSansBold9pt7b, REM_WHITE);
+    centerString("No pending reminders", 148, &FreeSans9pt7b, REM_GREY);
 
-  if (syncState == REMINDERS_SYNC_FAILED) {
-    tft.setFont(NULL);
-    tft.setTextSize(1);
-    tft.setTextColor(REM_RED);
-    tft.setCursor(68, 166);
-    tft.print("SELECT TO RETRY");
+    if (syncState == REMINDERS_SYNC_FAILED) {
+      tft.setFont(NULL);
+      tft.setTextSize(1);
+      tft.setTextColor(REM_RED);
+      tft.setCursor(68, 166);
+      tft.print("SELECT TO RETRY");
+    }
   }
 }
 
@@ -600,5 +698,9 @@ void RemindersApp::renderUnauthState() {
   tft.setCursor(40, 144);
   tft.print("sync Calendar & Tasks.");
 
-  drawBadge(64, 160, 112, 18, "SELECT: RETRY", REM_YELLOW, REM_BG);
+  if (syncing) {
+    drawBadge(64, 160, 112, 18, "SYNCING...", REM_YELLOW, REM_BG);
+  } else {
+    drawBadge(64, 160, 112, 18, "SELECT: RETRY", REM_YELLOW, REM_BG);
+  }
 }

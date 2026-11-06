@@ -60,7 +60,17 @@ bool wallpaperLoaded = false;
 bool wallpaperAttempted = false;
 uint32_t tjpgCallbackCount = 0;
 
-static const char* GITHUB_ROOT_CA =
+// Clock Background Clearing Cache (eliminates overlapping text/ghosting)
+#define CLOCK_BG_X 25
+#define CLOCK_BG_Y 124
+#define CLOCK_BG_W 190
+#define CLOCK_BG_H 56
+
+static uint16_t* s_clockBg = nullptr;
+static char s_lastTimeString[8] = "";
+static char s_lastDateString[20] = "";
+
+const char* GITHUB_ROOT_CA =
 // ISRG Root X1 (Let's Encrypt Root)
 "-----BEGIN CERTIFICATE-----\n"
 "MIIFazCCA1OgAwIBAgIRAIIQz7DSQONZRGPgu2OCiwAwDQYJKoZIhvcNAQELBQAw\n"
@@ -133,6 +143,24 @@ bool tjpgOutput(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t* bitmap) 
   tjpgCallbackCount++;
   if (y >= SCREEN_H) return 0;
   tft.drawRGBBitmap(x, y, bitmap, w, h);
+
+  // Capture pristine wallpaper pixels for the clock/date region
+  if (s_clockBg != nullptr) {
+    int16_t x_start = max((int16_t)CLOCK_BG_X, x);
+    int16_t x_end = min((int16_t)(CLOCK_BG_X + CLOCK_BG_W), (int16_t)(x + w));
+    int16_t y_start = max((int16_t)CLOCK_BG_Y, y);
+    int16_t y_end = min((int16_t)(CLOCK_BG_Y + CLOCK_BG_H), (int16_t)(y + h));
+
+    if (x_start < x_end && y_start < y_end) {
+      for (int16_t py = y_start; py < y_end; py++) {
+        for (int16_t px = x_start; px < x_end; px++) {
+          uint16_t pixel = bitmap[(py - y) * w + (px - x)];
+          s_clockBg[(py - CLOCK_BG_Y) * CLOCK_BG_W + (px - CLOCK_BG_X)] = pixel;
+        }
+      }
+    }
+  }
+
   return 1;
 }
 
@@ -618,21 +646,39 @@ bool renderWallpaper() {
   return false;
 }
 
-void drawClock() {
-
+void drawClock(bool force = false) {
   struct tm timeInfo;
 
   if (getLocalTime(&timeInfo, 10)) {
     char timeString[8];
     strftime(timeString, sizeof(timeString), "%H:%M", &timeInfo);
-    centerText(timeString, 146, &FreeSansBold9pt7b, WHITE);
 
     char dateString[20];
     strftime(dateString, sizeof(dateString), "%a, %b %d", &timeInfo);
     for (int i = 0; dateString[i]; i++) {
       dateString[i] = toupper((unsigned char)dateString[i]);
     }
+
+    // Skip redrawing if text has not changed and not forced
+    if (!force && strcmp(timeString, s_lastTimeString) == 0 && strcmp(dateString, s_lastDateString) == 0) {
+      lastClockUpdate = millis();
+      return;
+    }
+
+    // Erase previous text and restore background before redrawing
+    if (wallpaperLoaded && s_clockBg != nullptr) {
+      tft.drawRGBBitmap(CLOCK_BG_X, CLOCK_BG_Y, s_clockBg, CLOCK_BG_W, CLOCK_BG_H);
+    } else {
+      tft.fillRect(CLOCK_BG_X, CLOCK_BG_Y, CLOCK_BG_W, CLOCK_BG_H, BG);
+    }
+
+    centerText(timeString, 146, &FreeSansBold9pt7b, WHITE);
     centerText(dateString, 170, &FreeSans9pt7b, WHITE);
+
+    strncpy(s_lastTimeString, timeString, sizeof(s_lastTimeString) - 1);
+    s_lastTimeString[sizeof(s_lastTimeString) - 1] = '\0';
+    strncpy(s_lastDateString, dateString, sizeof(s_lastDateString) - 1);
+    s_lastDateString[sizeof(s_lastDateString) - 1] = '\0';
   }
 
   lastClockUpdate = millis();
@@ -677,8 +723,7 @@ void drawHome() {
     wallpaperLoaded = true;
   }
 
-
-  drawClock();
+  drawClock(true);
 }
 
 // ======================================
@@ -1872,6 +1917,16 @@ void setup() {
   }
 
   Serial.println("Carousel canvas ready.");
+
+  if (!s_clockBg) {
+    s_clockBg = (uint16_t*)malloc(CLOCK_BG_W * CLOCK_BG_H * sizeof(uint16_t));
+    if (s_clockBg) {
+      Serial.printf("[DISPLAY] Allocated %u bytes for clock background clearing cache.\n",
+                    (unsigned int)(CLOCK_BG_W * CLOCK_BG_H * sizeof(uint16_t)));
+    } else {
+      Serial.println("[DISPLAY] WARNING: Failed to allocate clock background clearing cache.");
+    }
+  }
 
   if (!LittleFS.begin(true)) {
     Serial.println("[STORAGE] LittleFS mount failed, formatting...");
