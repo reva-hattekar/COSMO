@@ -140,11 +140,13 @@ bool tjpgOutput(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t* bitmap) 
 #include "TetrisGame.h"
 #include "SimonGame.h"
 #include "ChessApp.h"
+#include "RemindersApp.h"
 
 SnakeGame snake(tft);
 TetrisGame tetris(tft);
 SimonGame simon(tft);
 ChessApp chess(tft);
+RemindersApp reminders(tft);
 
 // ======================================
 // BUTTONS
@@ -743,10 +745,8 @@ const char* iconCachePaths[APP_COUNT] = {
   "/icon_reminders.jpg"
 };
 
-static int s_iconTargetX = 0;
-static int s_iconTargetY = 0;
-static int s_iconTargetR = 0;
-static float s_iconBrightness = 1.0f;
+static uint16_t s_iconRawBuf[80 * 80];
+static int s_cachedRawIndex = -1;
 static uint32_t s_iconCallbackCount = 0;
 
 void auditIconCache() {
@@ -774,28 +774,16 @@ void auditIconCache() {
   Serial.println("[STORAGE] =====================================================");
 }
 
-bool tjpgIconOutput(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t* bitmap) {
+bool tjpgIconDecodeCallback(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t* bitmap) {
   s_iconCallbackCount++;
-  uint16_t* buf = carouselCanvas.getBuffer();
-  if (!buf) return 0;
-
   for (int j = 0; j < h; j++) {
-    int cy = y + j;
-    if (cy < 0 || cy >= CANVAS_H) continue;
-    int row = cy * CANVAS_W;
+    int py = y + j;
+    if (py < 0 || py >= 80) continue;
+    int row = py * 80;
     for (int i = 0; i < w; i++) {
-      int cx = x + i;
-      if (cx < 0 || cx >= CANVAS_W) continue;
-
-      int dx = cx - s_iconTargetX;
-      int dy = cy - s_iconTargetY;
-      if ((dx * dx + dy * dy) <= (s_iconTargetR * s_iconTargetR)) {
-        uint16_t pixel = bitmap[j * w + i];
-        if (s_iconBrightness < 0.99f) {
-          pixel = dimColor(pixel, s_iconBrightness);
-        }
-        buf[row + cx] = pixel;
-      }
+      int px = x + i;
+      if (px < 0 || px >= 80) continue;
+      s_iconRawBuf[row + px] = bitmap[j * w + i];
     }
   }
   return 1;
@@ -1049,6 +1037,9 @@ bool downloadIcon(int index) {
     Serial.printf("[ICON-DOWNLOAD] ERROR: Failed to rename %s to %s\n", tempPath, destPath);
     return false;
   }
+  if (s_cachedRawIndex == index) {
+    s_cachedRawIndex = -1;
+  }
 
   Serial.printf("[ICON-DOWNLOAD] Final Status: SUCCESS -> %s is %u bytes (Cached successfully)\n",
                 destPath, (unsigned int)storedSize);
@@ -1167,32 +1158,66 @@ void drawAppIcon(
   if (!LittleFS.exists(cachePath)) {
     failReason = "File not found in LittleFS";
   } else {
-    s_iconTargetX = x;
-    s_iconTargetY = y;
-    s_iconBrightness = brightness;
-    s_iconCallbackCount = 0;
+    // If not already in raw buffer for this index, decode once from LittleFS
+    if (s_cachedRawIndex != index) {
+      s_iconCallbackCount = 0;
+      TJpgDec.setJpgScale(1);
+      TJpgDec.setSwapBytes(false);
+      TJpgDec.setCallback(tjpgIconDecodeCallback);
+      decRes = TJpgDec.drawFsJpg(0, 0, cachePath, LittleFS);
+      cbCount = s_iconCallbackCount;
+      if (decRes == JDR_OK && cbCount > 0) {
+        s_cachedRawIndex = index;
+      } else {
+        failReason = (decRes != JDR_OK) ? "TJpgDec decode error" : "Zero callbacks";
+      }
+    }
 
-    int scale = (radius < 35) ? 2 : 1;
-    TJpgDec.setJpgScale(scale);
-    TJpgDec.setSwapBytes(false);
-    TJpgDec.setCallback(tjpgIconOutput);
+    if (s_cachedRawIndex == index) {
+      uint16_t* canvasBuf = carouselCanvas.getBuffer();
+      if (canvasBuf) {
+        // Inner clipping boundary
+        int targetR = radius - (radius < 35 ? 3 : 5);
+        if (targetR < 4) targetR = 4;
+        int r2 = targetR * targetR;
 
-    int imgW = (scale == 2) ? 40 : 80;
-    int startX = x - (imgW / 2);
-    int startY = y - (imgW / 2);
+        // Zoom artwork: In the 80x80 asset, center is at (40, 40).
+        // The core artwork spans ~27.5 pixels radius.
+        // By mapping source radius 27.5 to targetR, the artwork fills ~90%
+        // of the circle, appearing prominently zoomed-in and beautifully centered.
+        const float R_SRC = 27.5f;
+        int invScaleFP = (int)((R_SRC / (float)targetR) * 256.0f);
 
-    s_iconTargetR = radius - (scale == 2 ? 3 : 5);
-    if (s_iconTargetR < 4) s_iconTargetR = 4;
+        for (int dy = -targetR; dy <= targetR; dy++) {
+          int cy = y + dy;
+          if (cy < 0 || cy >= CANVAS_H) continue;
+          int canvasRow = cy * CANVAS_W;
+          int dy2 = dy * dy;
 
-    decRes = TJpgDec.drawFsJpg(startX, startY, cachePath, LittleFS);
-    cbCount = s_iconCallbackCount;
+          int sy = 40 + ((dy * invScaleFP) >> 8);
+          if (sy < 0) sy = 0;
+          if (sy >= 80) sy = 79;
+          int srcRow = sy * 80;
 
-    if (decRes == JDR_OK && cbCount > 0) {
-      imageRendered = true;
-    } else if (decRes != JDR_OK) {
-      failReason = "TJpgDec.drawFsJpg returned error code";
-    } else {
-      failReason = "Zero callbacks invoked";
+          for (int dx = -targetR; dx <= targetR; dx++) {
+            if (dx * dx + dy2 <= r2) {
+              int cx = x + dx;
+              if (cx < 0 || cx >= CANVAS_W) continue;
+
+              int sx = 40 + ((dx * invScaleFP) >> 8);
+              if (sx < 0) sx = 0;
+              if (sx >= 80) sx = 79;
+
+              uint16_t pixel = s_iconRawBuf[srcRow + sx];
+              if (brightness < 0.99f) {
+                pixel = dimColor(pixel, brightness);
+              }
+              canvasBuf[canvasRow + cx] = pixel;
+            }
+          }
+        }
+        imageRendered = true;
+      }
     }
   }
 
@@ -1216,8 +1241,8 @@ void drawAppIcon(
     static unsigned long s_lastSuccessLog[APP_COUNT] = {0};
     if (millis() - s_lastSuccessLog[index] > 10000) {
       s_lastSuccessLog[index] = millis();
-      Serial.printf("[ICON-RENDER] App [%d] %s: SUCCESS - Rendered to carouselCanvas (callbacks=%d, brightness=%.2f)\n",
-                    index, appNames[index], cbCount, brightness);
+      Serial.printf("[ICON-RENDER] App [%d] %s: SUCCESS - Rendered zoomed artwork to carousel (brightness=%.2f)\n",
+                    index, appNames[index], brightness);
     }
   }
 }
@@ -1710,7 +1735,8 @@ void openApp() {
       break;
 
     case 5:
-      drawPlaceholder("REMINDERS", "DAILY TASKS");
+      reminders.resetExit();
+      reminders.init();
       break;
   }
 }
@@ -1820,6 +1846,10 @@ void setup() {
 
   Serial.println("Starting COSMO...");
 
+#ifdef REMINDERS_BACKEND_URL
+  reminders.setBackendUrl(REMINDERS_BACKEND_URL);
+#endif
+
   tft.begin();
   tft.setRotation(2);
   tft.setTextWrap(false);
@@ -1895,6 +1925,7 @@ void setup() {
 void loop() {
 
   maintainWiFi();
+  reminders.maintain(WiFi.status() == WL_CONNECTED);
 
   updateButtons();
 
@@ -1921,6 +1952,7 @@ void loop() {
       // Chess (1), Magic 8 Ball (0), Snake (2), Tetris (3), Reminders (5)
       if (bothHeld()) {
         if (appIndex == 1) chess.resetExit();
+        if (appIndex == 5) reminders.resetExit();
         waitForButtonRelease();
         goLauncher();
         return;
@@ -2091,15 +2123,19 @@ void loop() {
       return;
     }
 
-    // Placeholder: Reminders (5)
+    // Reminders (5)
     if (appIndex == 5) {
-      if (
-        leftPressed ||
-        rightPressed ||
-        selectPressed
-      ) {
+      reminders.update(leftPressed, rightPressed, selectPressed);
+      if (reminders.wantsToExit()) {
+        reminders.resetExit();
+        waitForButtonRelease();
+        goLauncher();
+        return;
+      }
+      if (leftPressed || rightPressed || selectPressed || reminders.isActive()) {
         lastInteraction = millis();
       }
+      return;
     }
   }
 
@@ -2111,7 +2147,8 @@ void loop() {
     (appIndex == 1 && chess.isActive()) ||
     (appIndex == 2 && snake.isActive()) ||
     (appIndex == 3 && tetris.isActive()) ||
-    (appIndex == 4 && simon.isActive())
+    (appIndex == 4 && simon.isActive()) ||
+    (appIndex == 5 && reminders.isActive())
   ));
 
   if (
