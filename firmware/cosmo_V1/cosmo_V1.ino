@@ -683,12 +683,12 @@ uint16_t dimColor(uint16_t color, float brightness) {
 // ======================================
 
 const char* iconFileNames[APP_COUNT] = {
-  "icon_8ball.png",
-  "icon_chess.png",
-  "icon_snake.png",
-  "icon_tetris.png",
-  "icon_simon.png",
-  "icon_reminders.png"
+  "icon_8ball.jpg",
+  "icon_chess.jpg",
+  "icon_snake.jpg",
+  "icon_tetris.jpg",
+  "icon_simon.jpg",
+  "icon_reminders.jpg"
 };
 
 const char* iconCachePaths[APP_COUNT] = {
@@ -704,8 +704,35 @@ static int s_iconTargetX = 0;
 static int s_iconTargetY = 0;
 static int s_iconTargetR = 0;
 static float s_iconBrightness = 1.0f;
+static uint32_t s_iconCallbackCount = 0;
+
+void auditIconCache() {
+  Serial.println("[STORAGE] ================= ICON CACHE AUDIT =================");
+  for (int i = 0; i < APP_COUNT; i++) {
+    const char* path = iconCachePaths[i];
+    if (!LittleFS.exists(path)) {
+      Serial.printf("[STORAGE] Icon [%d] %s: MISSING from LittleFS\n", i, path);
+    } else {
+      File f = LittleFS.open(path, FILE_READ);
+      if (!f) {
+        Serial.printf("[STORAGE] Icon [%d] %s: FAILED TO OPEN\n", i, path);
+      } else {
+        size_t sz = f.size();
+        uint8_t hdr[2] = {0, 0};
+        f.read(hdr, 2);
+        f.close();
+        bool validJpg = (hdr[0] == 0xFF && hdr[1] == 0xD8);
+        Serial.printf("[STORAGE] Icon [%d] %s: %u bytes, header=0x%02X 0x%02X (%s)\n",
+                      i, path, (unsigned int)sz, hdr[0], hdr[1],
+                      validJpg ? "VALID JPEG" : "INVALID HEADER");
+      }
+    }
+  }
+  Serial.println("[STORAGE] =====================================================");
+}
 
 bool tjpgIconOutput(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t* bitmap) {
+  s_iconCallbackCount++;
   uint16_t* buf = carouselCanvas.getBuffer();
   if (!buf) return 0;
 
@@ -732,14 +759,19 @@ bool tjpgIconOutput(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t* bitm
 }
 
 bool downloadIcon(int index) {
-  if (WiFi.status() != WL_CONNECTED) return false;
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.printf("[ICON-DOWNLOAD] App [%d]: Skipped (Wi-Fi not connected)\n", index);
+    return false;
+  }
   if (index < 0 || index >= APP_COUNT) return false;
 
   char url[128];
   snprintf(url, sizeof(url), "https://raw.githubusercontent.com/reva-hattekar/COSMO/main/assets/%s", iconFileNames[index]);
   const char* destPath = iconCachePaths[index];
 
-  Serial.printf("[ICON] Downloading %s...\n", iconFileNames[index]);
+  Serial.println("[ICON-DOWNLOAD] ----------------------------------------");
+  Serial.printf("[ICON-DOWNLOAD] App [%d]: %s\n", index, appNames[index]);
+  Serial.printf("[ICON-DOWNLOAD] URL: %s\n", url);
 
   WiFiClientSecure client;
   time_t now = time(nullptr);
@@ -751,26 +783,32 @@ bool downloadIcon(int index) {
 
   HTTPClient http;
   http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
-  http.setTimeout(8000);
-  http.setConnectTimeout(5000);
+  http.setTimeout(10000);
+  http.setConnectTimeout(6000);
   http.setUserAgent("COSMO-ESP32");
-  http.addHeader("Accept", "image/jpeg, image/png, */*");
+  http.addHeader("Accept", "image/jpeg, */*");
 
   if (!http.begin(client, url)) {
-    Serial.printf("[ICON] Failed to begin HTTP for %s\n", iconFileNames[index]);
+    Serial.printf("[ICON-DOWNLOAD] ERROR: HTTPClient.begin failed for %s\n", url);
     return false;
   }
 
   int httpCode = http.GET();
+  Serial.printf("[ICON-DOWNLOAD] HTTP Status: %d (%s)\n", httpCode, http.errorToString(httpCode).c_str());
+
   if (httpCode != HTTP_CODE_OK) {
-    Serial.printf("[ICON] HTTP error %d for %s\n", httpCode, iconFileNames[index]);
     http.end();
     return false;
   }
 
   const char* tempPath = "/icon_tmp.jpg";
+  if (LittleFS.exists(tempPath)) {
+    LittleFS.remove(tempPath);
+  }
+
   File f = LittleFS.open(tempPath, FILE_WRITE);
   if (!f) {
+    Serial.printf("[ICON-DOWNLOAD] ERROR: Could not open %s for writing\n", tempPath);
     http.end();
     return false;
   }
@@ -780,20 +818,42 @@ bool downloadIcon(int index) {
   f.close();
   http.end();
 
+  Serial.printf("[ICON-DOWNLOAD] Downloaded bytes: %d\n", written);
+
   if (written < 500) {
-    Serial.printf("[ICON] Incomplete download for %s (%d bytes)\n", iconFileNames[index], written);
+    Serial.printf("[ICON-DOWNLOAD] ERROR: Download incomplete (%d bytes < 500)\n", written);
     LittleFS.remove(tempPath);
     return false;
   }
 
   File vf = LittleFS.open(tempPath, FILE_READ);
-  if (!vf) return false;
+  if (!vf) {
+    Serial.printf("[ICON-DOWNLOAD] ERROR: Could not reopen %s for verification\n", tempPath);
+    return false;
+  }
+  size_t storedSize = vf.size();
   uint8_t hdr[2] = {0, 0};
   vf.read(hdr, 2);
   vf.close();
 
-  if (hdr[0] != 0xFF || hdr[1] != 0xD8) {
-    Serial.printf("[ICON] Validation failed for %s (not a valid JPEG: 0x%02X 0x%02X)\n", iconFileNames[index], hdr[0], hdr[1]);
+  Serial.printf("[ICON-DOWNLOAD] LittleFS file size: %u bytes\n", (unsigned int)storedSize);
+  bool validHdr = (hdr[0] == 0xFF && hdr[1] == 0xD8);
+  Serial.printf("[ICON-DOWNLOAD] JPEG validation: magic=0x%02X 0x%02X (%s)\n",
+                hdr[0], hdr[1], validHdr ? "VALID JPEG" : "INVALID HEADER");
+
+  if (!validHdr) {
+    Serial.println("[ICON-DOWNLOAD] ERROR: Staged file is not a valid JPEG! Purging staging file.");
+    LittleFS.remove(tempPath);
+    return false;
+  }
+
+  uint16_t jw = 0, jh = 0;
+  JRESULT jres = TJpgDec.getFsJpgSize(&jw, &jh, tempPath, LittleFS);
+  Serial.printf("[ICON-DOWNLOAD] TJpg_Decoder test: code=%d (%s), dimensions=%ux%u\n",
+                (int)jres, (jres == JDR_OK ? "JDR_OK" : "HEADER_ERROR"), jw, jh);
+
+  if (jres != JDR_OK) {
+    Serial.printf("[ICON-DOWNLOAD] ERROR: TJpg_Decoder cannot parse JPEG header (code=%d)\n", (int)jres);
     LittleFS.remove(tempPath);
     return false;
   }
@@ -802,17 +862,20 @@ bool downloadIcon(int index) {
     LittleFS.remove(destPath);
   }
   if (!LittleFS.rename(tempPath, destPath)) {
-    Serial.printf("[ICON] Failed to rename temp icon to %s\n", destPath);
+    Serial.printf("[ICON-DOWNLOAD] ERROR: Failed to rename %s to %s\n", tempPath, destPath);
     return false;
   }
 
-  Serial.printf("[ICON] SUCCESS: %s cached to %s (%d bytes)\n", iconFileNames[index], destPath, written);
+  Serial.printf("[ICON-DOWNLOAD] Final Status: SUCCESS -> %s is %u bytes (Cached successfully)\n",
+                destPath, (unsigned int)storedSize);
+  Serial.println("[ICON-DOWNLOAD] ----------------------------------------");
   return true;
 }
 
-void syncAppIcons() {
-  if (WiFi.status() != WL_CONNECTED) return;
+bool syncAppIcons() {
+  if (WiFi.status() != WL_CONNECTED) return false;
 
+  bool anyDownloaded = false;
   for (int i = 0; i < APP_COUNT; i++) {
     bool needDownload = true;
     if (LittleFS.exists(iconCachePaths[i])) {
@@ -830,9 +893,21 @@ void syncAppIcons() {
     }
 
     if (needDownload) {
-      downloadIcon(i);
+      if (downloadIcon(i)) {
+        anyDownloaded = true;
+      }
+      delay(100);
     }
   }
+
+  if (anyDownloaded) {
+    Serial.println("[ICON] New icon(s) successfully cached. Triggering carousel redraw...");
+    if (screen == LAUNCHER) {
+      renderCarousel(1.0f);
+      presentCarousel();
+    }
+  }
+  return anyDownloaded;
 }
 
 // ======================================
@@ -847,7 +922,6 @@ void drawAppIcon(
   int radius,
   float brightness = 1.0f
 ) {
-
   index = (index + APP_COUNT) % APP_COUNT;
 
   uint16_t baseColour = dimColor(getAppColour(index), brightness);
@@ -858,11 +932,17 @@ void drawAppIcon(
 
   const char* cachePath = iconCachePaths[index];
   bool imageRendered = false;
+  const char* failReason = "Unknown";
+  int cbCount = 0;
+  JRESULT decRes = JDR_INP;
 
-  if (LittleFS.exists(cachePath)) {
+  if (!LittleFS.exists(cachePath)) {
+    failReason = "File not found in LittleFS";
+  } else {
     s_iconTargetX = x;
     s_iconTargetY = y;
     s_iconBrightness = brightness;
+    s_iconCallbackCount = 0;
 
     int scale = (radius < 35) ? 2 : 1;
     TJpgDec.setJpgScale(scale);
@@ -876,20 +956,41 @@ void drawAppIcon(
     s_iconTargetR = radius - (scale == 2 ? 3 : 5);
     if (s_iconTargetR < 4) s_iconTargetR = 4;
 
-    JRESULT res = TJpgDec.drawFsJpg(startX, startY, cachePath, LittleFS);
-    if (res == JDR_OK) {
+    decRes = TJpgDec.drawFsJpg(startX, startY, cachePath, LittleFS);
+    cbCount = s_iconCallbackCount;
+
+    if (decRes == JDR_OK && cbCount > 0) {
       imageRendered = true;
+    } else if (decRes != JDR_OK) {
+      failReason = "TJpgDec.drawFsJpg returned error code";
+    } else {
+      failReason = "Zero callbacks invoked";
     }
   }
 
+  const char initials[] = {'8', 'C', 'S', 'T', 'M', 'R'};
+
   // Fallback emblem if not yet cached or if decode failed
   if (!imageRendered) {
+    static unsigned long s_lastFailLog[APP_COUNT] = {0};
+    if (millis() - s_lastFailLog[index] > 6000) {
+      s_lastFailLog[index] = millis();
+      Serial.printf("[ICON-RENDER] App [%d] %s: FALLBACK ('%c') - Reason: %s (decRes=%d, callbacks=%d)\n",
+                    index, appNames[index], initials[index], failReason, (int)decRes, cbCount);
+    }
+
     g.drawCircle(x, y, radius - 4, whiteColour);
     g.setFont(&FreeSansBold12pt7b);
     g.setTextColor(whiteColour);
-    const char initials[] = {'8', 'C', 'S', 'T', 'M', 'R'};
     g.setCursor(x - 7, y + 8);
     g.print(initials[index]);
+  } else {
+    static unsigned long s_lastSuccessLog[APP_COUNT] = {0};
+    if (millis() - s_lastSuccessLog[index] > 10000) {
+      s_lastSuccessLog[index] = millis();
+      Serial.printf("[ICON-RENDER] App [%d] %s: SUCCESS - Rendered to carouselCanvas (callbacks=%d, brightness=%.2f)\n",
+                    index, appNames[index], cbCount, brightness);
+    }
   }
 }
 
@@ -1523,6 +1624,9 @@ void setup() {
                   (unsigned int)(totalBytes / 1024), (unsigned int)(usedBytes / 1024));
   }
 
+  // Audit and print current LittleFS icon cache status
+  auditIconCache();
+
   TJpgDec.setJpgScale(1);
   TJpgDec.setSwapBytes(false);
   TJpgDec.setCallback(tjpgOutput);
@@ -1598,6 +1702,25 @@ void loop() {
         goLauncher();
         return;
       }
+    }
+  }
+
+  // ==================================
+  // BACKGROUND ICON SYNC (IF MISSING)
+  // ==================================
+
+  static unsigned long lastIconSyncCheck = 0;
+  if (WiFi.status() == WL_CONNECTED && millis() - lastIconSyncCheck >= 10000) {
+    lastIconSyncCheck = millis();
+    bool missingAny = false;
+    for (int i = 0; i < APP_COUNT; i++) {
+      if (!LittleFS.exists(iconCachePaths[i])) {
+        missingAny = true;
+        break;
+      }
+    }
+    if (missingAny) {
+      syncAppIcons();
     }
   }
 
