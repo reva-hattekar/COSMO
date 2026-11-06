@@ -52,7 +52,7 @@ const int SCREEN_H = 240;
 // ONLINE WALLPAPER CONFIGURATION
 // ======================================
 
-#define COSMO_WALLPAPER_URL "https://raw.githubusercontent.com/reva-hattekar/COSMO/main/assets/wallpaper_240.jpg"
+#define COSMO_WALLPAPER_URL "https://raw.githubusercontent.com/reva-hattekar/COSMO/main/assets/wallpaper_1.png"
 const char* WALLPAPER_CACHE_PATH = "/wallpaper.jpg";
 
 bool wallpaperLoaded = false;
@@ -263,17 +263,59 @@ bool updateButton(Button& button) {
   return false;
 }
 
-void updateButtons() {
+const unsigned long REPEAT_INITIAL_DELAY = 400; // 400 ms initial hold before repeat
+const unsigned long REPEAT_INTERVAL      = 120; // 120 ms repeat interval
 
+unsigned long leftHoldStart = 0;
+unsigned long leftNextRepeat = 0;
+unsigned long rightHoldStart = 0;
+unsigned long rightNextRepeat = 0;
+
+bool leftRepeated = false;
+bool rightRepeated = false;
+
+bool bothHeld() {
+  return digitalRead(BTN_LEFT) == LOW &&
+         digitalRead(BTN_RIGHT) == LOW;
+}
+
+void updateButtons() {
   leftPressed = updateButton(leftButton);
   rightPressed = updateButton(rightButton);
   selectPressed = updateButton(selectButton);
-}
 
-bool bothHeld() {
+  leftRepeated = false;
+  rightRepeated = false;
 
-  return digitalRead(BTN_LEFT) == LOW &&
-         digitalRead(BTN_RIGHT) == LOW;
+  // Auto-repeat for Left / Right navigation (disabled if both held)
+  if (!bothHeld()) {
+    if (digitalRead(BTN_LEFT) == LOW) {
+      if (leftHoldStart == 0) {
+        leftHoldStart = millis();
+        leftNextRepeat = leftHoldStart + REPEAT_INITIAL_DELAY;
+      } else if (millis() >= leftNextRepeat) {
+        leftRepeated = true;
+        leftNextRepeat = millis() + REPEAT_INTERVAL;
+      }
+    } else {
+      leftHoldStart = 0;
+    }
+
+    if (digitalRead(BTN_RIGHT) == LOW) {
+      if (rightHoldStart == 0) {
+        rightHoldStart = millis();
+        rightNextRepeat = rightHoldStart + REPEAT_INITIAL_DELAY;
+      } else if (millis() >= rightNextRepeat) {
+        rightRepeated = true;
+        rightNextRepeat = millis() + REPEAT_INTERVAL;
+      }
+    } else {
+      rightHoldStart = 0;
+    }
+  } else {
+    leftHoldStart = 0;
+    rightHoldStart = 0;
+  }
 }
 
 void waitForButtonRelease() {
@@ -290,6 +332,10 @@ void waitForButtonRelease() {
   leftPressed = false;
   rightPressed = false;
   selectPressed = false;
+  leftRepeated = false;
+  rightRepeated = false;
+  leftHoldStart = 0;
+  rightHoldStart = 0;
 }
 
 // ======================================
@@ -1182,6 +1228,7 @@ void openApp() {
       break;
 
     case 1:
+      chess.resetExit();
       chess.init();
       break;
 
@@ -1401,17 +1448,16 @@ void loop() {
         goLauncher();
         return;
       }
-    } else if (appIndex == 1) {
-      // Chess: manages menu internally, and signals wantsToExit()
-      if (chess.wantsToExit()) {
-        chess.resetExit();
+    } else {
+      // Chess (1), Magic 8 Ball (0), Snake (2), Tetris (3), Reminders (5)
+      if (bothHeld()) {
+        if (appIndex == 1) chess.resetExit();
         waitForButtonRelease();
         goLauncher();
         return;
       }
-    } else {
-      // Magic 8 Ball (0), Snake (2), Tetris (3), Reminders (5)
-      if (bothHeld()) {
+      if (appIndex == 1 && chess.wantsToExit()) {
+        chess.resetExit();
         waitForButtonRelease();
         goLauncher();
         return;
@@ -1508,14 +1554,16 @@ void loop() {
 
     // Chess (1)
     if (appIndex == 1) {
-      chess.update(leftPressed, rightPressed, selectPressed);
+      bool leftAct = leftPressed || leftRepeated;
+      bool rightAct = rightPressed || rightRepeated;
+      chess.update(leftAct, rightAct, selectPressed);
       if (chess.wantsToExit()) {
         chess.resetExit();
         waitForButtonRelease();
         goLauncher();
         return;
       }
-      if (leftPressed || rightPressed || selectPressed || chess.isActive()) {
+      if (leftAct || rightAct || selectPressed || chess.isActive()) {
         lastInteraction = millis();
       }
       return;

@@ -23,7 +23,8 @@
 ```
 COSMO/
 ├── assets/
-│   └── wallpaper_240.jpg       # 240x240 optimized galaxy wallpaper
+│   ├── wallpaper_1.png         # 240x240 optimized galaxy wallpaper
+│   └── wallpaper_1.jpg         # 240x240 JPEG mirror
 ├── docs/
 │   ├── GOOGLE_OAUTH_SETUP.md   # Google Cloud OAuth 2.0 configuration guide
 │   └── RAILWAY_DEPLOYMENT.md   # Railway deployment instructions

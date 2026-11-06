@@ -7,7 +7,11 @@
 #define COL_SELECTED    0x07FF
 #define COL_CURSOR      0xFFE0
 #define COL_LEGAL_DOT   0x07E0
+#define COL_CAPTURE     0xF800
 #define COL_CHECK       0xF800
+#define COL_AI_FROM     0xFEA0
+#define COL_AI_TO       0x07FF
+#define COL_LAST_MOVE   0x4A69
 #define COL_WHITE_PIECE 0xFFFF
 #define COL_BLACK_PIECE 0x18C3
 #define COL_TEXT_GREY   0x9CF3
@@ -46,14 +50,14 @@ ChessApp::ChessApp(Adafruit_GC9A01A& display)
     selectedSq(-1),
     currentMoveCount(0),
     currentMoveIndex(0),
+    aiPreviewStart(0),
+    lastMoveFrom(-1),
+    lastMoveTo(-1),
     modeVsAI(true),
     aiDifficulty(DIFF_MEDIUM),
     gameStatus(STATUS_ACTIVE),
     menuIndex(0),
-    exitRequested(false),
-    boardDirty(true),
-    aiNeedsToMove(false),
-    lastAITriggerTime(0)
+    exitRequested(false)
 {
 }
 
@@ -64,12 +68,12 @@ void ChessApp::init() {
   selectedSq = -1;
   currentMoveCount = 0;
   currentMoveIndex = 0;
+  aiPreviewStart = 0;
+  lastMoveFrom = -1;
+  lastMoveTo = -1;
   gameStatus = STATUS_ACTIVE;
   menuIndex = 0;
   exitRequested = false;
-  boardDirty = true;
-  aiNeedsToMove = false;
-  lastAITriggerTime = 0;
 
   renderAll();
 }
@@ -95,6 +99,16 @@ int ChessApp::getSquareY(int8_t sq) const {
   int rank = sq / 8;
   // White is at bottom (rank 0 -> bottom), Black at top (rank 7 -> top)
   return 44 + ((7 - rank) * 19);
+}
+
+void ChessApp::squareToAlgebraic(int8_t sq, char* out) const {
+  if (sq < 0 || sq >= 64) {
+    out[0] = '-'; out[1] = '-'; out[2] = '\0';
+    return;
+  }
+  out[0] = 'A' + (sq % 8);
+  out[1] = '1' + (sq / 8);
+  out[2] = '\0';
 }
 
 void ChessApp::centerText(const char* text, int y, const GFXfont* font, uint16_t color) {
@@ -127,8 +141,6 @@ void ChessApp::drawPiece(int8_t sq, int8_t piece) {
   }
 
   // Draw 12x12 piece sprite
-  // For White piece: Crisp White body with dark border shadow
-  // For Black piece: Dark charcoal body with crisp White/Cyan outline
   for (int r = 0; r < 12; r++) {
     uint16_t rowBits = bmp[r];
     for (int c = 0; c < 12; c++) {
@@ -148,7 +160,6 @@ void ChessApp::drawPiece(int8_t sq, int8_t piece) {
       uint16_t rowBits = bmp[r];
       for (int c = 0; c < 12; c++) {
         if ((rowBits >> (15 - c)) & 1) {
-          // Check neighbors
           bool edge = false;
           if (r == 0 || !((bmp[r-1] >> (15 - c)) & 1)) edge = true;
           if (r == 11 || !((bmp[r+1] >> (15 - c)) & 1)) edge = true;
@@ -186,12 +197,17 @@ void ChessApp::drawSquare(int8_t sq) {
 
   // Selected square tint
   if (sq == selectedSq) {
-    baseColor = 0x0315; // Dark cyan/blue
+    baseColor = 0x0215; // Dark cyan/blue
   }
 
   tft.fillRect(x, y, 19, 19, baseColor);
 
-  // Check if this square is attacked king in check
+  // Subtle outline on previous move squares (from & to)
+  if (sq == lastMoveFrom || sq == lastMoveTo) {
+    tft.drawRect(x, y, 19, 19, COL_LAST_MOVE);
+  }
+
+  // Check if this square is King in check
   int8_t piece = engine.getPiece(sq);
   if (piece != 0 && abs(piece) == PIECE_KING && ((piece > 0) ? engine.isInCheck(COLOR_WHITE) : engine.isInCheck(COLOR_BLACK))) {
     tft.drawRect(x, y, 19, 19, COL_CHECK);
@@ -201,19 +217,30 @@ void ChessApp::drawSquare(int8_t sq) {
   // Draw piece
   drawPiece(sq, piece);
 
-  // Legal destination dot if in target select mode
+  // Legal destination markers
   if (state == CHESS_SELECT_DEST) {
     for (int i = 0; i < currentMoveCount; i++) {
       if (currentMoves[i].to == sq) {
         if (piece == 0) {
           tft.fillCircle(x + 9, y + 9, 3, COL_LEGAL_DOT);
         } else {
-          // Capture target: draw 4 corner markers
-          tft.drawRect(x, y, 19, 19, COL_LEGAL_DOT);
-          tft.drawRect(x + 1, y + 1, 17, 17, COL_LEGAL_DOT);
+          // Capture target: red corner brackets
+          tft.drawRect(x, y, 19, 19, COL_CAPTURE);
+          tft.drawRect(x + 1, y + 1, 17, 17, COL_CAPTURE);
         }
         break;
       }
+    }
+  }
+
+  // AI Move Preview Highlight
+  if (state == CHESS_AI_PREVIEW) {
+    if (sq == pendingAIMove.from) {
+      tft.drawRect(x, y, 19, 19, COL_AI_FROM);
+      tft.drawRect(x + 1, y + 1, 17, 17, COL_AI_FROM);
+    } else if (sq == pendingAIMove.to) {
+      tft.drawRect(x, y, 19, 19, COL_AI_TO);
+      tft.drawRect(x + 1, y + 1, 17, 17, COL_AI_TO);
     }
   }
 
@@ -231,7 +258,6 @@ void ChessApp::drawSquare(int8_t sq) {
 }
 
 void ChessApp::drawBoard() {
-  // Board outer border
   tft.drawRect(42, 42, 156, 156, COL_CARD_BORDER);
 
   for (int8_t sq = 0; sq < 64; sq++) {
@@ -240,62 +266,79 @@ void ChessApp::drawBoard() {
 }
 
 void ChessApp::drawTopStatus() {
-  tft.fillRoundRect(25, 14, 190, 24, 6, COL_CARD_BG);
-  tft.drawRoundRect(25, 14, 190, 24, 6, COL_CARD_BORDER);
+  // Top pill: X=58, Y=18, W=124, H=20 (Fully inside circle)
+  tft.fillRoundRect(58, 18, 124, 20, 5, COL_CARD_BG);
+  tft.drawRoundRect(58, 18, 124, 20, 5, COL_CARD_BORDER);
 
-  const char* msg = "WHITE'S TURN";
+  char msg[24];
   uint16_t col = 0xFFFF;
 
   if (state == CHESS_AI_THINKING) {
-    msg = "COSMO THINKING...";
+    snprintf(msg, sizeof(msg), "AI THINKING");
     col = 0x07FF;
+  } else if (state == CHESS_AI_PREVIEW) {
+    char fAlg[3], tAlg[3];
+    squareToAlgebraic(pendingAIMove.from, fAlg);
+    squareToAlgebraic(pendingAIMove.to, tAlg);
+    snprintf(msg, sizeof(msg), "AI: %s->%s", fAlg, tAlg);
+    col = COL_AI_FROM;
   } else if (gameStatus == STATUS_CHECKMATE) {
-    msg = (engine.getTurn() == COLOR_WHITE) ? "CHECKMATE! BLACK WINS" : "CHECKMATE! WHITE WINS";
+    snprintf(msg, sizeof(msg), "CHECKMATE");
     col = 0xF800;
   } else if (gameStatus == STATUS_STALEMATE) {
-    msg = "STALEMATE - DRAW";
+    snprintf(msg, sizeof(msg), "STALEMATE");
     col = 0xFFE0;
   } else if (gameStatus == STATUS_DRAW) {
-    msg = "50-MOVE DRAW";
+    snprintf(msg, sizeof(msg), "DRAW");
     col = 0xFFE0;
   } else if (gameStatus == STATUS_CHECK) {
-    msg = (engine.getTurn() == COLOR_WHITE) ? "WHITE IN CHECK!" : "BLACK IN CHECK!";
+    snprintf(msg, sizeof(msg), "CHECK!");
     col = 0xF800;
   } else {
-    if (engine.getTurn() == COLOR_BLACK) {
-      msg = modeVsAI ? "COSMO'S TURN" : "BLACK'S TURN";
+    if (engine.getTurn() == COLOR_WHITE) {
+      snprintf(msg, sizeof(msg), "WHITE TURN");
+      col = 0xFFFF;
+    } else {
+      snprintf(msg, sizeof(msg), modeVsAI ? "COSMO TURN" : "BLACK TURN");
       col = 0x9CF3;
     }
   }
 
-  centerText(msg, 31, &FreeSansBold9pt7b, col);
+  centerText(msg, 33, &FreeSansBold9pt7b, col);
 }
 
 void ChessApp::drawBottomBar() {
-  tft.fillRoundRect(35, 202, 170, 24, 6, COL_CARD_BG);
-  tft.drawRoundRect(35, 202, 170, 24, 6, COL_CARD_BORDER);
+  // Bottom pill: X=58, Y=202, W=124, H=20 (Fully inside circle)
+  tft.fillRoundRect(58, 202, 124, 20, 5, COL_CARD_BG);
+  tft.drawRoundRect(58, 202, 124, 20, 5, COL_CARD_BORDER);
 
-  char buf[32];
+  char buf[24];
+  uint16_t col = COL_TEXT_GREY;
+
   if (state == CHESS_SELECT_DEST) {
-    snprintf(buf, sizeof(buf), "SEL:MOVE  L+R:CANCEL");
+    snprintf(buf, sizeof(buf), "SELECT MOVE");
+    col = 0x07FF;
+  } else if (state == CHESS_AI_PREVIEW) {
+    snprintf(buf, sizeof(buf), "COSMO MOVE");
+    col = COL_AI_FROM;
   } else if (state == CHESS_GAME_OVER) {
-    snprintf(buf, sizeof(buf), "SELECT: MENU");
+    snprintf(buf, sizeof(buf), "GAME OVER");
+    col = 0xF800;
   } else {
     if (modeVsAI) {
-      const char* diffStr = (aiDifficulty == DIFF_EASY) ? "EASY" : ((aiDifficulty == DIFF_MEDIUM) ? "MED" : "HARD");
-      snprintf(buf, sizeof(buf), "PvAI [%s]  L+R:MENU", diffStr);
+      snprintf(buf, sizeof(buf), "P1 vs COSMO");
     } else {
-      snprintf(buf, sizeof(buf), "2-PLAYER   L+R:MENU");
+      snprintf(buf, sizeof(buf), "2-PLAYER");
     }
   }
 
-  centerText(buf, 219, &FreeSans9pt7b, COL_TEXT_GREY);
+  centerText(buf, 217, &FreeSans9pt7b, col);
 }
 
 void ChessApp::drawMenu() {
-  // Draw semi-transparent modal card
-  tft.fillRoundRect(30, 36, 180, 168, 8, 0x0842);
-  tft.drawRoundRect(30, 36, 180, 168, 8, 0x07FF);
+  // Centered modal: X=42, Y=38, W=156, H=164 (Fully inside circle)
+  tft.fillRoundRect(42, 38, 156, 164, 8, 0x0842);
+  tft.drawRoundRect(42, 38, 156, 164, 8, 0x07FF);
 
   centerText("CHESS MENU", 56, &FreeSansBold9pt7b, 0x07FF);
 
@@ -303,19 +346,19 @@ void ChessApp::drawMenu() {
   items[0] = "RESUME";
   items[1] = "NEW GAME";
 
-  char modeBuf[24];
-  snprintf(modeBuf, sizeof(modeBuf), "MODE: %s", modeVsAI ? "PvAI" : "2P LOCAL");
+  char modeBuf[20];
+  snprintf(modeBuf, sizeof(modeBuf), "%s", modeVsAI ? "MODE: PvAI" : "MODE: 2P");
   items[2] = modeBuf;
 
-  char diffBuf[24];
-  const char* diffName = (aiDifficulty == DIFF_EASY) ? "EASY" : ((aiDifficulty == DIFF_MEDIUM) ? "MEDIUM" : "HARD");
+  char diffBuf[20];
+  const char* diffName = (aiDifficulty == DIFF_EASY) ? "EASY" : ((aiDifficulty == DIFF_MEDIUM) ? "MED" : "HARD");
   snprintf(diffBuf, sizeof(diffBuf), "AI: %s", diffName);
   items[3] = diffBuf;
 
   items[4] = "UNDO MOVE";
   items[5] = "EXIT TO HOME";
 
-  int startY = 82;
+  int startY = 80;
   int lineSpacing = 18;
 
   for (int i = 0; i < MENU_ITEM_COUNT; i++) {
@@ -323,7 +366,7 @@ void ChessApp::drawMenu() {
     bool isSel = (i == menuIndex);
 
     if (isSel) {
-      tft.fillRoundRect(36, y - 13, 168, 16, 4, 0x2104);
+      tft.fillRoundRect(48, y - 13, 144, 16, 4, 0x2104);
       centerText(items[i], y, &FreeSans9pt7b, 0xFFE0);
     } else {
       centerText(items[i], y, &FreeSans9pt7b, 0xFFFF);
@@ -343,20 +386,7 @@ void ChessApp::renderAll() {
 }
 
 void ChessApp::update(bool left, bool right, bool select) {
-  // 1. Both buttons held / chord -> Toggle In-Game Menu
-  if (left && right) {
-    if (state != CHESS_MENU) {
-      state = CHESS_MENU;
-      menuIndex = 0;
-      drawMenu();
-    } else {
-      state = CHESS_SELECT_PIECE;
-      renderAll();
-    }
-    return;
-  }
-
-  // 2. Menu State Handling
+  // 1. In-Game Menu State
   if (state == CHESS_MENU) {
     if (left) {
       menuIndex = (menuIndex + MENU_ITEM_COUNT - 1) % MENU_ITEM_COUNT;
@@ -385,16 +415,17 @@ void ChessApp::update(bool left, bool right, bool select) {
           if (engine.canUndo()) {
             engine.undoMove();
             if (modeVsAI && engine.canUndo()) {
-              // In PvAI mode, undo both AI and player move to return turn to player
               engine.undoMove();
             }
             selectedSq = -1;
+            lastMoveFrom = -1;
+            lastMoveTo = -1;
             state = CHESS_SELECT_PIECE;
             gameStatus = engine.evaluateGameStatus();
             renderAll();
           }
           break;
-        case 5: // EXIT
+        case 5: // EXIT TO HOME
           exitRequested = true;
           break;
       }
@@ -402,9 +433,9 @@ void ChessApp::update(bool left, bool right, bool select) {
     return;
   }
 
-  // 3. Game Over State Handling
+  // 2. Game Over State Handling
   if (state == CHESS_GAME_OVER) {
-    if (select || (left && right)) {
+    if (select) {
       state = CHESS_MENU;
       menuIndex = 1; // Default to "NEW GAME"
       drawMenu();
@@ -412,19 +443,35 @@ void ChessApp::update(bool left, bool right, bool select) {
     return;
   }
 
-  // 4. AI Thinking Execution
+  // 3. AI Thinking State (Calculates move, enters Preview)
   if (state == CHESS_AI_THINKING) {
-    ChessMove aiMove;
-    if (engine.computeAIMove(aiDifficulty, aiMove)) {
-      engine.executeMove(aiMove);
-    }
-    gameStatus = engine.evaluateGameStatus();
-    if (gameStatus == STATUS_CHECKMATE || gameStatus == STATUS_STALEMATE || gameStatus == STATUS_DRAW) {
-      state = CHESS_GAME_OVER;
+    if (engine.computeAIMove(aiDifficulty, pendingAIMove)) {
+      aiPreviewStart = millis();
+      state = CHESS_AI_PREVIEW;
+      renderAll(); // Shows "AI: G8->F6" and highlights source & target squares
     } else {
-      state = CHESS_SELECT_PIECE;
+      gameStatus = engine.evaluateGameStatus();
+      state = CHESS_GAME_OVER;
+      renderAll();
     }
-    renderAll();
+    return;
+  }
+
+  // 4. AI Preview State (Shows intended move for ~950ms before moving)
+  if (state == CHESS_AI_PREVIEW) {
+    if (millis() - aiPreviewStart >= 950) {
+      engine.executeMove(pendingAIMove);
+      lastMoveFrom = pendingAIMove.from;
+      lastMoveTo = pendingAIMove.to;
+      gameStatus = engine.evaluateGameStatus();
+
+      if (gameStatus == STATUS_CHECKMATE || gameStatus == STATUS_STALEMATE || gameStatus == STATUS_DRAW) {
+        state = CHESS_GAME_OVER;
+      } else {
+        state = CHESS_SELECT_PIECE;
+      }
+      renderAll();
+    }
     return;
   }
 
@@ -463,9 +510,7 @@ void ChessApp::update(bool left, bool right, bool select) {
   // 6. Destination Selection State
   else if (state == CHESS_SELECT_DEST) {
     int8_t prevSq = cursorSq;
-
-    // Left/Right cycles through legal destinations + cancel square (selectedSq)
-    int totalChoices = currentMoveCount + 1; // last choice is cancel
+    int totalChoices = currentMoveCount + 1; // last choice is cancel (returns to selected piece)
 
     if (left) {
       currentMoveIndex = (currentMoveIndex + totalChoices - 1) % totalChoices;
@@ -493,10 +538,12 @@ void ChessApp::update(bool left, bool right, bool select) {
         return;
       }
 
-      // Execute selected legal move
+      // Execute selected move
       ChessMove chosenMove = currentMoves[currentMoveIndex];
       engine.executeMove(chosenMove);
 
+      lastMoveFrom = chosenMove.from;
+      lastMoveTo = chosenMove.to;
       selectedSq = -1;
       gameStatus = engine.evaluateGameStatus();
 
@@ -506,7 +553,7 @@ void ChessApp::update(bool left, bool right, bool select) {
       } else {
         if (modeVsAI && engine.getTurn() == COLOR_BLACK) {
           state = CHESS_AI_THINKING;
-          renderAll(); // Shows "COSMO THINKING..."
+          renderAll(); // Shows "AI THINKING" immediately
         } else {
           state = CHESS_SELECT_PIECE;
           renderAll();
@@ -515,4 +562,3 @@ void ChessApp::update(bool left, bool right, bool select) {
     }
   }
 }
-

@@ -12,6 +12,7 @@ enum ChessAppState {
   CHESS_SELECT_PIECE,
   CHESS_SELECT_DEST,
   CHESS_AI_THINKING,
+  CHESS_AI_PREVIEW,
   CHESS_MENU,
   CHESS_GAME_OVER
 };
@@ -39,6 +40,14 @@ private:
   int currentMoveCount;
   int currentMoveIndex;
 
+  // AI preview tracking
+  ChessMove pendingAIMove;
+  unsigned long aiPreviewStart;
+
+  // Move tracking for visual feedback
+  int8_t lastMoveFrom;
+  int8_t lastMoveTo;
+
   // Settings
   bool modeVsAI; // true = PvC, false = 2-player local
   AIDifficulty aiDifficulty;
@@ -49,9 +58,6 @@ private:
   static const int MENU_ITEM_COUNT = 6;
 
   bool exitRequested;
-  bool boardDirty;
-  bool aiNeedsToMove;
-  unsigned long lastAITriggerTime;
 
   // UI rendering
   void renderAll();
@@ -66,7 +72,7 @@ private:
   int getSquareX(int8_t sq) const;
   int getSquareY(int8_t sq) const;
   void centerText(const char* text, int y, const GFXfont* font, uint16_t color);
+  void squareToAlgebraic(int8_t sq, char* out) const;
 };
 
 #endif // CHESS_APP_H
-
